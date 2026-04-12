@@ -61,10 +61,24 @@ jobs:
       - name: Download VLC SDK
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.zip" -OutFile vlc.zip
-          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-temp
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip"
+          $vlcHash = "a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843"
+
+          Invoke-WebRequest -Uri $vlcUrl -OutFile vlc.zip
+
+          if ((Get-FileHash vlc.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcHash) {
+            throw "Downloaded VLC SDK checksum mismatch"
+          }
+
+          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-temp -Force
+
           # VLC SDK 경로 정리
           $vlcDir = Get-ChildItem C:\vlc-temp -Directory | Select-Object -First 1
+          if (-not $vlcDir) {
+            throw "Expanded VLC SDK directory not found"
+          }
           Move-Item $vlcDir.FullName C:\vlc-sdk
 
       - name: Build
