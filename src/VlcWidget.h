@@ -23,7 +23,11 @@ public:
     };
 
     void play(const QString &url, const QString &name = QString());
+    void reconnect();
     void setLogCallback(std::function<void(const QString &, int)> callback) { m_logCallback = callback; }
+    void setAutoReconnect(bool enabled) { m_autoReconnect = enabled; }
+    bool autoReconnect() const { return m_autoReconnect; }
+    void setFullscreenMode(bool fs) { m_isFullscreen = fs; }
     void stop();
     bool isPlaying() const;
     QString url() const { return m_url; }
@@ -32,11 +36,16 @@ public:
     Stats getStats() const;
     bool takeSnapshot(const QString &filePath);
 
+    enum class Status { Idle, Connecting, Connected, Disconnected, Reconnecting, Failed };
+    Status status() const { return m_status; }
+    static QString statusText(Status s);
+
 signals:
     void doubleClicked(VlcWidget *widget);
     void requestFullscreen(VlcWidget *widget);
     void requestRemove(VlcWidget *widget);
     void snapshotTaken(const QString &filePath);
+    void statusChanged(VlcWidget *widget, VlcWidget::Status status);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -52,14 +61,22 @@ private:
     QLabel *m_timeLabel = nullptr;
     QString m_url;
     QString m_name;
+    bool m_autoReconnect = true;
+    bool m_isFullscreen = false;
+    bool m_reconnecting = false;
+    Status m_status = Status::Idle;
+    void setStatus(Status s);
+    static const int MAX_RECONNECT = 30;
 
     std::function<void(const QString &, int)> m_logCallback;
     void log(const QString &msg, int level = 1);
     void attachToSurface();
+    void detachEvents();
     void setupEvents();
     void showStatus(const QString &text);
     void showContextMenu(const QPoint &globalPos);
     void tryReconnect();
+    void cleanupPlayer();
 
     QTimer *m_reconnectTimer = nullptr;
     int m_reconnectCount = 0;

@@ -12,12 +12,15 @@
 #include <QJsonObject>
 #include <QFile>
 #include <QDir>
+#include <QMenu>
 #include <QEvent>
 #include <QResizeEvent>
 #include <QScrollArea>
+#include <QTextBlock>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
+static const int MAX_LOG_LINES = 1000;
 
 MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     : QMainWindow(parent)
@@ -37,21 +40,18 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // 좌측 사이드바
     auto *sidebar = new QWidget(panelRow);
     sidebar->setFixedWidth(200);
     sidebar->setStyleSheet("background-color: #1a1a1a;");
     setupSidebar(sidebar);
     mainLayout->addWidget(sidebar);
 
-    // 중앙 영상 영역
     auto *videoArea = new QWidget(panelRow);
     videoArea->setObjectName("videoArea");
     videoArea->setStyleSheet("#videoArea { background-color: black; border-left: 1px solid #333; border-right: 1px solid #333; }");
     setupVideoArea(videoArea);
     mainLayout->addWidget(videoArea, 1);
 
-    // 우측 패널
     auto *rightPanel = new QWidget(panelRow);
     rightPanel->setFixedWidth(280);
     rightPanel->setStyleSheet("background-color: #1a1a1a;");
@@ -60,13 +60,11 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     centralLayout->addWidget(panelRow, 1);
 
-    // 하단 상태 바
     m_statusBar = new StatusBar(central);
     centralLayout->addWidget(m_statusBar);
 
     setCentralWidget(central);
 
-    // 공통 시계 타이머
     m_clockTimer = new QTimer(this);
     connect(m_clockTimer, &QTimer::timeout, this, [this]() {
         QString timeStr = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
@@ -89,6 +87,115 @@ MainWindow::~MainWindow()
 }
 
 // ============================================================
+// 헬퍼: 뷰어 생성 + 시그널 연결 (코드 중복 제거)
+// ============================================================
+
+VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, bool autoReconnect)
+{
+    auto *viewer = new VlcWidget(m_vlcInstance, m_gridWidget);
+    viewer->setLogCallback([this](const QString &msg, int level) {
+        appendLog(msg, static_cast<LogLevel>(level));
+    });
+    viewer->setAutoReconnect(autoReconnect);
+    connect(viewer, &VlcWidget::doubleClicked, this, &MainWindow::openFullscreenTab);
+    connect(viewer, &VlcWidget::requestFullscreen, this, &MainWindow::openFullscreenTab);
+    connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
+        int idx = m_viewers.indexOf(v);
+        if (idx >= 0) {
+            QString chName = v->name();
+
+            // orphan fullscreen 탭 닫기
+            for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
+                auto *tabWidget = m_videoTabs->widget(i);
+                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(v)) {
+                    closeVideoTab(i);
+                }
+            }
+
+            m_viewers.removeAt(idx);
+            v->stop();
+            v->deleteLater();
+            m_channelTable->removeRow(idx);
+            appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
+            saveChannels();
+            rebuildGrid();
+        }
+    });
+    connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
+        appendLog(QString("Snapshot: %1").arg(path), LogLevel::INFO);
+    });
+    connect(viewer, &VlcWidget::statusChanged, this, [this](VlcWidget *v, VlcWidget::Status s) {
+        int idx = m_viewers.indexOf(v);
+        if (idx < 0 || idx >= m_channelTable->rowCount()) return;
+        auto *cell = m_channelTable->cellWidget(idx, 0);
+        if (!cell) return;
+        auto *statusLabel = cell->findChild<QLabel *>("statusLabel");
+        if (!statusLabel) return;
+
+        QString text = VlcWidget::statusText(s);
+        QString color;
+        switch (s) {
+            case VlcWidget::Status::Connected:    color = "#4a4"; break;
+            case VlcWidget::Status::Connecting:   color = "#888"; break;
+            case VlcWidget::Status::Reconnecting: color = "#e8a838"; break;
+            case VlcWidget::Status::Disconnected: color = "#e85050"; break;
+            case VlcWidget::Status::Failed:       color = "#e85050"; break;
+            default:                              color = "#888"; break;
+        }
+        statusLabel->setText(text);
+        statusLabel->setStyleSheet(QString("color: %1; font-size: 10px; background: transparent;").arg(color));
+    });
+
+    m_viewers.append(viewer);
+    return viewer;
+}
+
+void MainWindow::addChannelToTable(const QString &name, const QString &url)
+{
+    int row = m_channelTable->rowCount();
+    m_channelTable->insertRow(row);
+
+    auto *cellWidget = new QWidget();
+    cellWidget->setStyleSheet("background-color: transparent;");
+    auto *cellLayout = new QVBoxLayout(cellWidget);
+    cellLayout->setContentsMargins(8, 4, 8, 4);
+    cellLayout->setSpacing(2);
+
+    auto *topRow = new QHBoxLayout();
+    topRow->setContentsMargins(0, 0, 0, 0);
+    auto *nameLabel = new QLabel(name, cellWidget);
+    nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
+    auto *statusLabel = new QLabel("대기", cellWidget);
+    statusLabel->setObjectName("statusLabel");
+    statusLabel->setStyleSheet("color: #888; font-size: 10px; background: transparent;");
+    topRow->addWidget(nameLabel);
+    topRow->addStretch();
+    topRow->addWidget(statusLabel);
+
+    auto *urlLabel = new QLabel(url, cellWidget);
+    urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
+    urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+
+    cellLayout->addLayout(topRow);
+    cellLayout->addWidget(urlLabel);
+
+    m_channelTable->setCellWidget(row, 0, cellWidget);
+    m_channelTable->setRowHeight(row, 46);
+}
+
+int MainWindow::effectiveGridCols() const
+{
+    int count = m_viewers.size();
+    if (m_gridCols != 0) return m_gridCols;
+
+    if (count <= 1)      return 1;
+    else if (count <= 4) return 2;
+    else if (count <= 9) return 3;
+    else if (count <= 16) return 4;
+    else                 return 5;
+}
+
+// ============================================================
 // 좌측 사이드바
 // ============================================================
 
@@ -98,7 +205,6 @@ void MainWindow::setupSidebar(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // 헤더 바 (높이 통일)
     auto *header = new QWidget(parent);
     header->setFixedHeight(HEADER_HEIGHT);
     header->setStyleSheet(HEADER_STYLE);
@@ -109,7 +215,6 @@ void MainWindow::setupSidebar(QWidget *parent)
     headerLayout->addWidget(title);
     layout->addWidget(header);
 
-    // 채널 테이블
     auto *body = new QWidget(parent);
     auto *bodyLayout = new QVBoxLayout(body);
     bodyLayout->setContentsMargins(8, 8, 8, 8);
@@ -133,9 +238,33 @@ void MainWindow::setupSidebar(QWidget *parent)
             openFullscreenTab(m_viewers[row]);
         }
     });
+    m_channelTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_channelTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
+        int row = m_channelTable->rowAt(pos.y());
+        if (row < 0) return;
+
+        m_channelTable->selectRow(row);
+
+        QMenu menu(this);
+        menu.setStyleSheet(
+            "QMenu { background-color: #2a2a2a; color: #ccc; border: 1px solid #444; font-size: 12px; }"
+            "QMenu::item { padding: 6px 20px; }"
+            "QMenu::item:selected { background-color: #335; }");
+        auto *fullscreenAction = menu.addAction("전체화면으로 열기");
+        menu.addSeparator();
+        auto *removeAction = menu.addAction("채널 삭제");
+
+        auto *selected = menu.exec(m_channelTable->viewport()->mapToGlobal(pos));
+        if (!selected) return;
+
+        if (selected == fullscreenAction && row < m_viewers.size()) {
+            openFullscreenTab(m_viewers[row]);
+        } else if (selected == removeAction) {
+            removeSelectedChannel();
+        }
+    });
     bodyLayout->addWidget(m_channelTable, 1);
 
-    // +/- 버튼
     auto *footerLayout = new QHBoxLayout();
     footerLayout->setContentsMargins(0, 4, 0, 0);
     footerLayout->setSpacing(2);
@@ -171,7 +300,6 @@ void MainWindow::setupVideoArea(QWidget *parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // 영상 탭 (헤더 바 역할 겸용)
     m_videoTabs = new QTabWidget(parent);
     m_videoTabs->setTabsClosable(false);
     m_videoTabs->tabBar()->setExpanding(false);
@@ -186,13 +314,11 @@ void MainWindow::setupVideoArea(QWidget *parent)
         "QTabBar::tab:selected { background-color: #111; color: white; "
         "border-bottom: 2px solid #4a9eff; }");
 
-    // "전체" 탭
     m_gridPage = new QWidget();
     auto *gridPageLayout = new QVBoxLayout(m_gridPage);
     gridPageLayout->setContentsMargins(0, 0, 0, 0);
     gridPageLayout->setSpacing(0);
 
-    // 스크롤 영역
     auto *scrollArea = new QScrollArea(m_gridPage);
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
@@ -219,7 +345,6 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::RightSide, nullptr);
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::LeftSide, nullptr);
 
-    // 리사이즈 시 셀 비율 업데이트
     scrollArea->installEventFilter(this);
     m_gridWidget->installEventFilter(this);
 
@@ -249,7 +374,7 @@ void MainWindow::setupRightPanel(QWidget *parent)
         "QTabBar::tab:selected { background-color: #1a1a1a; color: white; "
         "border-bottom: 2px solid #4a9eff; }");
 
-    // === 로그 탭 ===
+    // 로그 탭
     auto *logTab = new QWidget();
     auto *logLayout = new QVBoxLayout(logTab);
     logLayout->setContentsMargins(0, 0, 0, 0);
@@ -262,13 +387,12 @@ void MainWindow::setupRightPanel(QWidget *parent)
     logLayout->addWidget(m_logView);
     m_rightTabs->addTab(logTab, "로그");
 
-    // === 설정 탭 ===
+    // 설정 탭
     auto *settingsTab = new QWidget();
     auto *settingsLayout = new QVBoxLayout(settingsTab);
     settingsLayout->setContentsMargins(12, 12, 12, 12);
     settingsLayout->setSpacing(16);
 
-    // 그리드 컬럼 설정
     auto *colSection = new QLabel("그리드 컬럼", settingsTab);
     colSection->setStyleSheet("color: #888; font-size: 10px;");
     settingsLayout->addWidget(colSection);
@@ -294,13 +418,11 @@ void MainWindow::setupRightPanel(QWidget *parent)
             "QPushButton:hover { background-color: #2a2a2a; }");
         m_colBtnGroup->addButton(btn, values[i]);
         colBtnLayout->addWidget(btn);
-
         if (i == 0) btn->setChecked(true);
     }
 
     connect(m_colBtnGroup, &QButtonGroup::idClicked, this, &MainWindow::setGridColumns);
     settingsLayout->addLayout(colBtnLayout);
-
     settingsLayout->addStretch();
     m_rightTabs->addTab(settingsTab, "설정");
 
@@ -308,7 +430,7 @@ void MainWindow::setupRightPanel(QWidget *parent)
 }
 
 // ============================================================
-// 로그
+// 로그 (최대 라인 제한)
 // ============================================================
 
 void MainWindow::appendLog(const QString &message, LogLevel level)
@@ -327,6 +449,14 @@ void MainWindow::appendLog(const QString &message, LogLevel level)
         "<span style='color:%2'>[%3]</span> "
         "<span style='color:#ccc'>%4</span>")
         .arg(timestamp, color, label, message));
+
+    // 로그 라인 수 제한
+    while (m_logView->document()->blockCount() > MAX_LOG_LINES) {
+        QTextCursor cursor(m_logView->document()->begin());
+        cursor.select(QTextCursor::BlockUnderCursor);
+        cursor.removeSelectedText();
+        cursor.deleteChar();
+    }
 }
 
 // ============================================================
@@ -341,24 +471,29 @@ void MainWindow::setGridColumns(int cols)
 }
 
 // ============================================================
-// 영상 탭 (더블클릭 전체화면)
+// 영상 탭 (더블클릭 전체화면) — 위젯 포인터로 추적
 // ============================================================
 
 void MainWindow::openFullscreenTab(VlcWidget *viewer)
 {
-    for (auto it = m_fullscreenViewers.begin(); it != m_fullscreenViewers.end(); ++it) {
-        if (it.value() == viewer) {
-            m_videoTabs->setCurrentIndex(it.key());
+    // 이미 열려있는지 소스 뷰어 포인터로 확인
+    for (int i = 1; i < m_videoTabs->count(); ++i) {
+        auto *tabWidget = m_videoTabs->widget(i);
+        if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+            m_videoTabs->setCurrentIndex(i);
             return;
         }
     }
 
     auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
-    fullViewer->setLogCallback([this](const QString &msg, int level) { appendLog(msg, static_cast<LogLevel>(level)); });
+    fullViewer->setFullscreenMode(true);
+    fullViewer->setProperty("sourceViewer", QVariant::fromValue(reinterpret_cast<quintptr>(viewer)));
+    fullViewer->setLogCallback([this](const QString &msg, int level) {
+        appendLog(msg, static_cast<LogLevel>(level));
+    });
     fullViewer->play(viewer->url(), viewer->name());
 
     int tabIndex = m_videoTabs->addTab(fullViewer, "");
-    m_fullscreenViewers[tabIndex] = viewer;
 
     auto *tabLabel = new QLabel(viewer->name());
     tabLabel->setStyleSheet("color: #ccc; font-size: 11px; padding-left: 8px;");
@@ -391,7 +526,6 @@ void MainWindow::closeVideoTab(int index)
     auto *widget = qobject_cast<VlcWidget *>(m_videoTabs->widget(index));
 
     m_videoTabs->removeTab(index);
-    m_fullscreenViewers.remove(index);
 
     if (widget) {
         widget->stop();
@@ -419,6 +553,7 @@ void MainWindow::saveChannels()
         QJsonObject obj;
         obj["name"] = viewer->name();
         obj["url"] = viewer->url();
+        obj["autoReconnect"] = viewer->autoReconnect();
         arr.append(obj);
     }
 
@@ -438,48 +573,12 @@ void MainWindow::loadChannels()
         QJsonObject obj = val.toObject();
         QString name = obj["name"].toString();
         QString url = obj["url"].toString();
+        bool autoReconnect = obj.contains("autoReconnect") ? obj["autoReconnect"].toBool() : true;
         if (name.isEmpty() || url.isEmpty()) continue;
 
-        auto *viewer = new VlcWidget(m_vlcInstance, m_gridWidget);
-        viewer->setLogCallback([this](const QString &msg, int level) { appendLog(msg, static_cast<LogLevel>(level)); });
-        connect(viewer, &VlcWidget::doubleClicked, this, &MainWindow::openFullscreenTab);
-        connect(viewer, &VlcWidget::requestFullscreen, this, &MainWindow::openFullscreenTab);
-        connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
-            int idx = m_viewers.indexOf(v);
-            if (idx >= 0) {
-                QString chName = v->name();
-                m_viewers.removeAt(idx);
-                v->stop();
-                v->deleteLater();
-                m_channelTable->removeRow(idx);
-                appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
-                saveChannels();
-                rebuildGrid();
-            }
-        });
-        connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
-            appendLog(QString("Snapshot: %1").arg(path), LogLevel::INFO);
-        });
-        m_viewers.append(viewer);
+        auto *viewer = createViewer(name, url, autoReconnect);
+        addChannelToTable(name, url);
         viewer->play(url, name);
-
-        int row = m_channelTable->rowCount();
-        m_channelTable->insertRow(row);
-        auto *cellWidget = new QWidget();
-        cellWidget->setStyleSheet("background-color: transparent;");
-        auto *cellLayout = new QVBoxLayout(cellWidget);
-        cellLayout->setContentsMargins(8, 4, 8, 4);
-        cellLayout->setSpacing(2);
-        auto *nameLabel = new QLabel(name, cellWidget);
-        nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
-        auto *urlLabel = new QLabel(url, cellWidget);
-        urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
-        urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
-        cellLayout->addWidget(nameLabel);
-        cellLayout->addWidget(urlLabel);
-        m_channelTable->setCellWidget(row, 0, cellWidget);
-        m_channelTable->setRowHeight(row, 42);
-
         appendLog(QString("Channel loaded: %1").arg(name), LogLevel::DEBUG);
     }
 
@@ -498,46 +597,10 @@ void MainWindow::addChannel()
     const QString name = info->channelName;
     const QString url  = info->rtspUrl;
 
-    auto *viewer = new VlcWidget(m_vlcInstance, m_gridWidget);
-    viewer->setLogCallback([this](const QString &msg, int level) { appendLog(msg, static_cast<LogLevel>(level)); });
-    connect(viewer, &VlcWidget::doubleClicked, this, &MainWindow::openFullscreenTab);
-    connect(viewer, &VlcWidget::requestFullscreen, this, &MainWindow::openFullscreenTab);
-    connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
-        int idx = m_viewers.indexOf(v);
-        if (idx >= 0) {
-            QString chName = v->name();
-            m_viewers.removeAt(idx);
-            v->stop();
-            v->deleteLater();
-            m_channelTable->removeRow(idx);
-            appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
-            saveChannels();
-            rebuildGrid();
-        }
-    });
-    connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
-        appendLog(QString("Snapshot: %1").arg(path), LogLevel::INFO);
-    });
-    m_viewers.append(viewer);
+    auto *viewer = createViewer(name, url, info->autoReconnect);
+    addChannelToTable(name, url);
     viewer->play(url, name);
-
-    int row = m_channelTable->rowCount();
-    m_channelTable->insertRow(row);
-    auto *cellWidget = new QWidget();
-    cellWidget->setStyleSheet("background-color: transparent;");
-    auto *cellLayout = new QVBoxLayout(cellWidget);
-    cellLayout->setContentsMargins(8, 4, 8, 4);
-    cellLayout->setSpacing(2);
-    auto *nameLabel = new QLabel(name, cellWidget);
-    nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
-    auto *urlLabel = new QLabel(url, cellWidget);
-    urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
-    urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
-    cellLayout->addWidget(nameLabel);
-    cellLayout->addWidget(urlLabel);
-    m_channelTable->setCellWidget(row, 0, cellWidget);
-    m_channelTable->setRowHeight(row, 42);
-    m_channelTable->selectRow(row);
+    m_channelTable->selectRow(m_channelTable->rowCount() - 1);
 
     appendLog(QString("Channel added: %1 (%2)").arg(name, url), LogLevel::INFO);
     saveChannels();
@@ -559,10 +622,20 @@ void MainWindow::removeSelectedChannel()
 
     for (int row : rows) {
         if (row >= 0 && row < m_viewers.size()) {
-            QString chName = m_viewers[row]->name();
-            auto *viewer = m_viewers.takeAt(row);
+            auto *viewer = m_viewers[row];
+            QString chName = viewer->name();
+
+            // orphan fullscreen 탭 닫기
+            for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
+                auto *tabWidget = m_videoTabs->widget(i);
+                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+                    closeVideoTab(i);
+                }
+            }
+
+            m_viewers.removeAt(row);
             viewer->stop();
-            delete viewer;
+            viewer->deleteLater();
             m_channelTable->removeRow(row);
             appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
         }
@@ -594,22 +667,11 @@ void MainWindow::rebuildGrid()
     int count = m_viewers.size();
     if (count == 0) return;
 
-    int cols;
-    if (m_gridCols == 0) {
-        if (count <= 1)      cols = 1;
-        else if (count <= 4) cols = 2;
-        else if (count <= 9) cols = 3;
-        else if (count <= 16) cols = 4;
-        else                 cols = 5;
-    } else {
-        cols = m_gridCols;
-    }
-
+    int cols = effectiveGridCols();
     int rows = (count + cols - 1) / cols;
     int totalCells = rows * cols;
 
     for (int c = 0; c < cols; ++c) m_grid->setColumnStretch(c, 1);
-    // 행 stretch 없음 — updateGridCellSizes에서 높이 계산
 
     for (int i = 0; i < count; ++i) {
         m_grid->addWidget(m_viewers[i], i / cols, i % cols);
@@ -640,23 +702,12 @@ void MainWindow::updateGridCellSizes()
     int count = m_viewers.size();
     if (count == 0 || !m_grid) return;
 
-    int cols;
-    if (m_gridCols == 0) {
-        if (count <= 1)      cols = 1;
-        else if (count <= 4) cols = 2;
-        else if (count <= 9) cols = 3;
-        else if (count <= 16) cols = 4;
-        else                 cols = 5;
-    } else {
-        cols = m_gridCols;
-    }
-
+    int cols = effectiveGridCols();
     int gridWidth = m_gridWidget->parentWidget() ? m_gridWidget->parentWidget()->width() : m_gridWidget->width();
-    int cellWidth = (gridWidth - (cols - 1)) / cols;  // spacing 제외
-    int infoBarHeight = 36;  // 상단 정보 바 높이
-    int cellHeight = cellWidth * 3 / 4 + infoBarHeight;  // 4:3 비율 + 정보 바
+    int cellWidth = (gridWidth - (cols - 1)) / cols;
+    int infoBarHeight = 36;
+    int cellHeight = cellWidth * 3 / 4 + infoBarHeight;
 
-    // 모든 셀에 고정 높이 적용
     for (auto *viewer : m_viewers) {
         viewer->setFixedHeight(cellHeight);
     }

@@ -14,10 +14,7 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     : QWidget(parent)
     , m_vlcInstance(vlcInstance)
 {
-
     // 상단 정보 바 (2줄)
-    // 1행: [이름]                    [시간]
-    // 2행: [URL]
     auto *infoBar = new QWidget(this);
     infoBar->setStyleSheet("background-color: rgba(0,0,0,180);");
     infoBar->setFixedHeight(36);
@@ -66,8 +63,9 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     m_timeLabel->hide();
     m_placeholder->show();
 
-    // 재접속 타이머 (5초 간격)
+    // 재접속 타이머 (singleShot — 겹침 방지)
     m_reconnectTimer = new QTimer(this);
+    m_reconnectTimer->setSingleShot(true);
     m_reconnectTimer->setInterval(5000);
     connect(m_reconnectTimer, &QTimer::timeout, this, &VlcWidget::tryReconnect);
 }
@@ -83,19 +81,33 @@ void VlcWidget::play(const QString &url, const QString &name)
 
     m_url = url;
     m_name = name;
+    m_reconnecting = false;
+    m_reconnectCount = 0;
 
     libvlc_media_t *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
+    if (!media) {
+        log(QString("[%1] Failed to create media for %2").arg(m_name, url), 3);
+        setStatus(Status::Failed);
+        showStatus("Invalid URL");
+        return;
+    }
     libvlc_media_add_option(media, ":rtsp-tcp");
 
     m_player = libvlc_media_player_new_from_media(media);
     libvlc_media_release(media);
+
+    if (!m_player) {
+        log(QString("[%1] Failed to create player").arg(m_name), 3);
+        setStatus(Status::Failed);
+        showStatus("Player Error");
+        return;
+    }
 
     attachToSurface();
 
     m_placeholder->hide();
     m_videoSurface->show();
 
-    // 상단 정보 표시
     m_nameLabel->setText(name);
     m_infoLabel->setText(url);
     m_nameLabel->show();
@@ -104,6 +116,7 @@ void VlcWidget::play(const QString &url, const QString &name)
 
     setupEvents();
     libvlc_media_player_play(m_player);
+    setStatus(Status::Connecting);
     log(QString("[%1] Connecting to %2").arg(m_name, url), 0);
 }
 
@@ -115,6 +128,50 @@ void VlcWidget::setupEvents()
     libvlc_event_attach(em, libvlc_MediaPlayerEndReached, onEndReached, this);
     libvlc_event_attach(em, libvlc_MediaPlayerEncounteredError, onError, this);
     libvlc_event_attach(em, libvlc_MediaPlayerPlaying, onPlaying, this);
+}
+
+void VlcWidget::detachEvents()
+{
+    if (!m_player) return;
+
+    libvlc_event_manager_t *em = libvlc_media_player_event_manager(m_player);
+    libvlc_event_detach(em, libvlc_MediaPlayerEndReached, onEndReached, this);
+    libvlc_event_detach(em, libvlc_MediaPlayerEncounteredError, onError, this);
+    libvlc_event_detach(em, libvlc_MediaPlayerPlaying, onPlaying, this);
+}
+
+void VlcWidget::cleanupPlayer()
+{
+    if (!m_player) return;
+
+    detachEvents();
+
+    auto *player = m_player;
+    m_player = nullptr;
+    // 비동기로 정리 (UI 블로킹 방지)
+    (void)QtConcurrent::run([player]() {
+        libvlc_media_player_stop(player);
+        libvlc_media_player_release(player);
+    });
+}
+
+void VlcWidget::setStatus(Status s)
+{
+    m_status = s;
+    emit statusChanged(this, s);
+}
+
+QString VlcWidget::statusText(Status s)
+{
+    switch (s) {
+        case Status::Idle:          return "대기";
+        case Status::Connecting:    return "연결중";
+        case Status::Connected:     return "연결됨";
+        case Status::Disconnected:  return "끊김";
+        case Status::Reconnecting:  return "재연결중";
+        case Status::Failed:        return "실패";
+    }
+    return "";
 }
 
 void VlcWidget::showStatus(const QString &text)
@@ -133,6 +190,12 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
+        self->m_reconnecting = false;
+        self->m_reconnectCount = 0;
+        self->m_reconnectTimer->stop();
+        self->setStatus(Status::Connected);
+        self->m_placeholder->hide();
+        self->m_videoSurface->show();
         self->log(QString("[%1] Stream connected").arg(self->m_name), 1);
     }, Qt::QueuedConnection);
 }
@@ -141,10 +204,16 @@ void VlcWidget::onEndReached(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
-        self->showStatus("Disconnected — Reconnecting...");
+        if (!self->m_reconnecting) {
+            self->m_reconnectCount = 0;
+        }
+        self->m_reconnecting = true;
+        self->setStatus(Status::Disconnected);
+        self->showStatus("끊김");
         self->log(QString("[%1] Disconnected").arg(self->m_name), 2);
-        self->m_reconnectCount = 0;
-        self->m_reconnectTimer->start();
+        if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
+            self->m_reconnectTimer->start();
+        }
     }, Qt::QueuedConnection);
 }
 
@@ -152,10 +221,16 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
-        self->showStatus("Connection Error — Reconnecting...");
+        if (!self->m_reconnecting) {
+            self->m_reconnectCount = 0;
+        }
+        self->m_reconnecting = true;
+        self->setStatus(Status::Disconnected);
+        self->showStatus("연결 오류");
         self->log(QString("[%1] Connection Error").arg(self->m_name), 3);
-        self->m_reconnectCount = 0;
-        self->m_reconnectTimer->start();
+        if (self->m_autoReconnect) {
+            self->m_reconnectTimer->start();
+        }
     }, Qt::QueuedConnection);
 }
 
@@ -163,37 +238,63 @@ void VlcWidget::tryReconnect()
 {
     m_reconnectCount++;
 
-    if (m_url.isEmpty()) {
+    if (m_url.isEmpty() || m_reconnectCount > MAX_RECONNECT) {
         m_reconnectTimer->stop();
+        m_reconnecting = false;
+        if (m_reconnectCount > MAX_RECONNECT) {
+            setStatus(Status::Failed);
+            showStatus("Connection Failed");
+            log(QString("[%1] Max reconnect attempts reached").arg(m_name), 3);
+        }
         return;
     }
 
     // 이전 플레이어 정리
-    if (m_player) {
-        libvlc_media_player_stop(m_player);
-        libvlc_media_player_release(m_player);
-        m_player = nullptr;
-    }
+    cleanupPlayer();
 
-    showStatus(QString("Reconnecting... (%1)").arg(m_reconnectCount));
+    setStatus(Status::Reconnecting);
+    showStatus(QString("재연결중... (%1/%2)").arg(m_reconnectCount).arg(MAX_RECONNECT));
     log(QString("[%1] Reconnecting... attempt %2").arg(m_name).arg(m_reconnectCount), 2);
 
     // 재접속 시도
     libvlc_media_t *media = libvlc_media_new_location(m_vlcInstance, m_url.toUtf8().constData());
+    if (!media) {
+        log(QString("[%1] Failed to create media").arg(m_name), 3);
+        m_reconnectTimer->start();  // 다음 재시도 예약
+        return;
+    }
     libvlc_media_add_option(media, ":rtsp-tcp");
 
     m_player = libvlc_media_player_new_from_media(media);
     libvlc_media_release(media);
 
+    if (!m_player) {
+        log(QString("[%1] Failed to create player").arg(m_name), 3);
+        m_reconnectTimer->start();  // 다음 재시도 예약
+        return;
+    }
+
     attachToSurface();
 
-    m_placeholder->hide();
-    m_videoSurface->show();
-
+    // placeholder를 유지 — 연결 성공(onPlaying) 시에만 영상 표면 표시
     setupEvents();
     libvlc_media_player_play(m_player);
+    // 타이머는 여기서 시작하지 않음 — onError/onEndReached에서 실패 시 다시 예약
+}
 
+void VlcWidget::reconnect()
+{
+    if (m_url.isEmpty()) return;
+
+    QString url = m_url;
+    QString name = m_name;
+
+    cleanupPlayer();
     m_reconnectTimer->stop();
+    m_reconnecting = false;
+    m_reconnectCount = 0;
+
+    play(url, name);
 }
 
 void VlcWidget::updateTime(const QString &timeStr)
@@ -206,16 +307,9 @@ void VlcWidget::stop()
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
     }
+    m_reconnecting = false;
 
-    if (m_player) {
-        // 비동기로 정리 (UI 블로킹 방지)
-        auto *player = m_player;
-        m_player = nullptr;
-        QtConcurrent::run([player]() {
-            libvlc_media_player_stop(player);
-            libvlc_media_player_release(player);
-        });
-    }
+    cleanupPlayer();
 
     m_url.clear();
     m_name.clear();
@@ -248,7 +342,6 @@ VlcWidget::Stats VlcWidget::getStats() const
     if (media) {
         libvlc_media_stats_t stats{};
         if (libvlc_media_get_stats(media, &stats)) {
-            // f_demux_bitrate is in MiB/s, convert to Kbps
             s.bitrate_kbps = static_cast<double>(stats.f_demux_bitrate) * 8.0 * 1024.0;
             s.displayed_pictures = stats.i_displayed_pictures;
             s.lost_pictures = stats.i_lost_pictures;
@@ -284,15 +377,22 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
 
     auto *fullscreenAction = menu.addAction("전체화면으로 열기");
     auto *snapshotAction = menu.addAction("스냅샷 저장");
+    auto *reconnectAction = menu.addAction("재연결");
     menu.addSeparator();
     auto *removeAction = menu.addAction("채널 삭제");
-    removeAction->setEnabled(!m_url.isEmpty());
+
+    fullscreenAction->setEnabled(!m_url.isEmpty() && !m_isFullscreen);
+    snapshotAction->setEnabled(isPlaying());
+    reconnectAction->setEnabled(!m_url.isEmpty() && m_status != Status::Connected && m_status != Status::Connecting);
+    removeAction->setEnabled(!m_url.isEmpty() && !m_isFullscreen);
 
     auto *selected = menu.exec(globalPos);
     if (!selected) return;
 
     if (selected == fullscreenAction) {
         emit requestFullscreen(this);
+    } else if (selected == reconnectAction) {
+        reconnect();
     } else if (selected == snapshotAction) {
         QString dir = QDir::homePath() + "/.ziilab/snapshots";
         QDir().mkpath(dir);
@@ -325,6 +425,8 @@ bool VlcWidget::takeSnapshot(const QString &filePath)
 
 void VlcWidget::attachToSurface()
 {
+    if (!m_player) return;
+
 #if defined(__APPLE__)
     libvlc_media_player_set_nsobject(m_player, (void *)m_videoSurface->winId());
 #elif defined(_WIN32)

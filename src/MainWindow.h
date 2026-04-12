@@ -9,7 +9,6 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QButtonGroup>
-#include <QMap>
 #include <vlc/vlc.h>
 #include "ConnectionDialog.h"
 
@@ -41,7 +40,7 @@ private:
     QGridLayout *m_grid = nullptr;
     QTimer *m_clockTimer = nullptr;
     QTableWidget *m_channelTable = nullptr;
-    int m_gridCols = 0;  // 0 = auto
+    int m_gridCols = 0;
 
     // 우측 패널
     QTabWidget *m_rightTabs = nullptr;
@@ -51,10 +50,14 @@ private:
     // 영상 영역
     QTabWidget *m_videoTabs = nullptr;
     QWidget *m_gridPage = nullptr;
-    QMap<int, VlcWidget *> m_fullscreenViewers;
 
     // 상태 바
     StatusBar *m_statusBar = nullptr;
+
+    // 헬퍼
+    VlcWidget *createViewer(const QString &name, const QString &url, bool autoReconnect = true);
+    void addChannelToTable(const QString &name, const QString &url);
+    int effectiveGridCols() const;
 
     void rebuildGrid();
     void updateGridCellSizes();

@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <vlc/vlc.h>
 #include <cstdlib>
+#include <QThreadPool>
 #include "MainWindow.h"
 
 static MainWindow *g_mainWindow = nullptr;
@@ -63,13 +64,22 @@ int main(int argc, char *argv[])
     // VLC 내부 로그 캡처
     libvlc_log_set(vlcInstance, vlcLogCallback, nullptr);
 
-    MainWindow window(vlcInstance);
-    g_mainWindow = &window;
-    window.show();
+    auto *window = new MainWindow(vlcInstance);
+    g_mainWindow = window;
+    window->show();
 
     int result = app.exec();
 
+    // 1. 로그 콜백 비활성화
     g_mainWindow = nullptr;
+
+    // 2. MainWindow + 모든 VlcWidget 먼저 파괴 (stop/cleanupPlayer 실행)
+    delete window;
+
+    // 3. 백그라운드 VLC 정리 태스크 완료 대기
+    QThreadPool::globalInstance()->waitForDone(5000);
+
+    // 4. 마지막으로 VLC 인스턴스 해제
     libvlc_release(vlcInstance);
     return result;
 }

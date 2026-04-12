@@ -1,0 +1,96 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ============================================================
+  # macOS 빌드
+  # ============================================================
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          brew install cmake qt@6
+          brew install --cask vlc
+
+      - name: Build
+        run: |
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_PREFIX_PATH=$(brew --prefix qt@6)
+          make -j$(sysctl -n hw.ncpu)
+
+      - name: Package (.app)
+        run: |
+          cd build
+          $(brew --prefix qt@6)/bin/macdeployqt viewer.app || true
+
+          # VLC 라이브러리 복사
+          mkdir -p viewer.app/Contents/Frameworks
+          cp /Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib viewer.app/Contents/Frameworks/
+          cp /Applications/VLC.app/Contents/MacOS/lib/libvlccore.dylib viewer.app/Contents/Frameworks/
+          cp -r /Applications/VLC.app/Contents/MacOS/plugins viewer.app/Contents/Frameworks/plugins
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZiiLabViewer-macOS
+          path: build/viewer.app
+
+  # ============================================================
+  # Windows 빌드
+  # ============================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.0'
+          arch: win64_msvc2022_64
+          modules: qtmultimedia
+
+      - name: Download VLC SDK
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://get.videolan.org/vlc/3.0.21/win64/vlc-3.0.21-win64.zip" -OutFile vlc.zip
+          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-temp
+          # VLC SDK 경로 정리
+          $vlcDir = Get-ChildItem C:\vlc-temp -Directory | Select-Object -First 1
+          Move-Item $vlcDir.FullName C:\vlc-sdk
+
+      - name: Build
+        shell: cmd
+        run: |
+          mkdir build && cd build
+          cmake .. -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_PREFIX_PATH=%Qt6_DIR% ^
+            -DVLC_DIR=C:\vlc-sdk
+          cmake --build .
+
+      - name: Package
+        shell: cmd
+        run: |
+          cd build
+          windeployqt.exe --release viewer.exe
+          copy C:\vlc-sdk\libvlc.dll .
+          copy C:\vlc-sdk\libvlccore.dll .
+          xcopy C:\vlc-sdk\plugins plugins\ /E /I /Y
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZiiLabViewer-Windows
+          path: |
+            build/viewer.exe
+            build/*.dll
+            build/plugins/
