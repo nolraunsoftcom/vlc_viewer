@@ -29,7 +29,12 @@ jobs:
       - name: Package (.app)
         run: |
           cd build
-          $(brew --prefix qt@6)/bin/macdeployqt viewer.app || true
+          test -d viewer.app
+          chmod -R u+w viewer.app
+          $(brew --prefix qt@6)/bin/macdeployqt viewer.app \
+            -libpath=$(brew --prefix)/Frameworks \
+            -always-overwrite
+          chmod -R u+w viewer.app
 
           # VLC 라이브러리 복사
           mkdir -p viewer.app/Contents/Frameworks
@@ -37,11 +42,19 @@ jobs:
           cp /Applications/VLC.app/Contents/MacOS/lib/libvlccore.dylib viewer.app/Contents/Frameworks/
           cp -r /Applications/VLC.app/Contents/MacOS/plugins viewer.app/Contents/Frameworks/plugins
 
+          if ! otool -l viewer.app/Contents/MacOS/viewer | grep -q "@executable_path/../Frameworks"; then
+            install_name_tool -add_rpath "@executable_path/../Frameworks" viewer.app/Contents/MacOS/viewer
+          fi
+
+          rm -rf dist
+          mkdir -p dist
+          cp -R viewer.app dist/viewer.app
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZiiLabViewer-macOS
-          path: build/viewer.app
+          path: build/dist/
 
   # ============================================================
   # Windows 빌드
@@ -58,6 +71,11 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtmultimedia
 
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Download VLC SDK
         shell: pwsh
         run: |
@@ -72,14 +90,24 @@ jobs:
             throw "Downloaded VLC SDK checksum mismatch"
           }
 
-          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-temp -Force
+          Remove-Item C:\vlc-sdk -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path C:\vlc-sdk | Out-Null
+          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-sdk -Force
 
-          # VLC SDK 경로 정리
-          $vlcDir = Get-ChildItem C:\vlc-temp -Directory | Select-Object -First 1
-          if (-not $vlcDir) {
-            throw "Expanded VLC SDK directory not found"
+          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
+            $nestedRoot = Get-ChildItem C:\vlc-sdk -Directory |
+              Where-Object { Test-Path (Join-Path $_.FullName "sdk\include\vlc\vlc.h") } |
+              Select-Object -First 1
+
+            if ($nestedRoot) {
+              Get-ChildItem $nestedRoot.FullName -Force | Move-Item -Destination C:\vlc-sdk -Force
+              Remove-Item $nestedRoot.FullName -Recurse -Force
+            }
           }
-          Move-Item $vlcDir.FullName C:\vlc-sdk
+
+          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
+            throw "libVLC headers not found under C:\vlc-sdk"
+          }
 
       - name: Build
         shell: cmd
@@ -87,6 +115,8 @@ jobs:
           mkdir build && cd build
           cmake .. -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_C_COMPILER=cl ^
+            -DCMAKE_CXX_COMPILER=cl ^
             -DCMAKE_PREFIX_PATH=%Qt6_DIR% ^
             -DVLC_DIR=C:\vlc-sdk
           cmake --build .

@@ -1,4 +1,6 @@
 #include <QApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <vlc/vlc.h>
 #include <cstdlib>
 #include <QThreadPool>
@@ -35,11 +37,21 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
 
 int main(int argc, char *argv[])
 {
-#if defined(__APPLE__)
-    setenv("VLC_PLUGIN_PATH", "/Applications/VLC.app/Contents/MacOS/plugins", 1);
-#endif
-
     QApplication app(argc, argv);
+
+#if defined(__APPLE__)
+    QString pluginPath;
+    const QDir appDir(QApplication::applicationDirPath());
+    const QFileInfo bundledPlugins(appDir.filePath("../Frameworks/plugins"));
+
+    if (bundledPlugins.exists() && bundledPlugins.isDir()) {
+        pluginPath = bundledPlugins.canonicalFilePath();
+    } else {
+        pluginPath = QStringLiteral("/Applications/VLC.app/Contents/MacOS/plugins");
+    }
+
+    setenv("VLC_PLUGIN_PATH", pluginPath.toUtf8().constData(), 1);
+#endif
 
     // VLC 인스턴스 생성 (저지연 설정)
     const char *vlcArgs[] = {

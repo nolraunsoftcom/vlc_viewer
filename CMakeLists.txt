@@ -12,37 +12,65 @@ find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 # ============================================================
 if(APPLE)
     # macOS: VLC.app에서 가져오기
-    set(VLC_INCLUDE_DIR "/Applications/VLC.app/Contents/MacOS/include"
-        CACHE PATH "VLC include directory")
-    set(VLC_LIB_DIR "/Applications/VLC.app/Contents/MacOS/lib"
-        CACHE PATH "VLC library directory")
+    set(VLC_DIR "/Applications/VLC.app/Contents/MacOS"
+        CACHE PATH "VLC root directory")
+    set(_vlc_include_hints "${VLC_DIR}/include")
+    set(_vlc_library_hints "${VLC_DIR}/lib")
 elseif(WIN32)
     # Windows: VLC SDK 경로 (cmake -DVLC_DIR=C:/vlc-sdk 로 지정)
     if(NOT VLC_DIR)
         set(VLC_DIR "C:/vlc-sdk" CACHE PATH "VLC SDK root directory")
     endif()
-    set(VLC_INCLUDE_DIR "${VLC_DIR}/sdk/include"
-        CACHE PATH "VLC include directory")
-    set(VLC_LIB_DIR "${VLC_DIR}/sdk/lib"
-        CACHE PATH "VLC library directory")
+    set(_vlc_include_hints
+        "${VLC_DIR}/sdk/include"
+        "${VLC_DIR}/include")
+    set(_vlc_library_hints
+        "${VLC_DIR}/sdk/lib"
+        "${VLC_DIR}/lib")
 endif()
+
+find_path(VLC_INCLUDE_DIR
+    NAMES vlc/vlc.h
+    HINTS ${_vlc_include_hints}
+    REQUIRED)
+
+find_library(VLC_LIBRARY
+    NAMES vlc libvlc
+    HINTS ${_vlc_library_hints}
+    REQUIRED)
+
+message(STATUS "Using libVLC headers: ${VLC_INCLUDE_DIR}")
+message(STATUS "Using libVLC library: ${VLC_LIBRARY}")
 
 # ============================================================
 # 실행 파일
 # ============================================================
-add_executable(viewer
-    src/main.cpp
-    src/MainWindow.cpp
-    src/VlcWidget.cpp
-    src/ConnectionDialog.cpp
-    src/StatusBar.cpp
-)
+if(APPLE)
+    add_executable(viewer MACOSX_BUNDLE
+        src/main.cpp
+        src/MainWindow.cpp
+        src/VlcWidget.cpp
+        src/ConnectionDialog.cpp
+        src/StatusBar.cpp
+    )
+else()
+    add_executable(viewer
+        src/main.cpp
+        src/MainWindow.cpp
+        src/VlcWidget.cpp
+        src/ConnectionDialog.cpp
+        src/StatusBar.cpp
+    )
+endif()
 
 target_include_directories(viewer PRIVATE ${VLC_INCLUDE_DIR})
-target_link_directories(viewer PRIVATE ${VLC_LIB_DIR})
+target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent ${VLC_LIBRARY})
 
-if(WIN32)
-    target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent libvlc)
-else()
-    target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent vlc)
+if(APPLE)
+    set_target_properties(viewer PROPERTIES
+        MACOSX_BUNDLE_BUNDLE_NAME "ZiiLabViewer"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.nolsoft.ziilab.viewer"
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+    )
 endif()
