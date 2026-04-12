@@ -55,6 +55,7 @@ int main(int argc, char *argv[])
 
     // VLC 인스턴스 생성 (저지연 설정)
     const char *vlcArgs[] = {
+        "--reset-plugins-cache",
         "--network-caching=300",
         "--clock-jitter=5000",
         "--clock-synchro=0",

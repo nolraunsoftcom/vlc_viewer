@@ -76,37 +76,88 @@ jobs:
         with:
           arch: x64
 
-      - name: Download VLC SDK
+      - name: Download VLC runtime and headers
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
-          $vlcUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip"
-          $vlcHash = "a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843"
+          $vlcBinUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip"
+          $vlcBinHash = "a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843"
+          $vlcSrcUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/vlc-3.0.21.tar.xz"
+          $vlcSrcHash = "24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0"
 
-          Invoke-WebRequest -Uri $vlcUrl -OutFile vlc.zip
+          Invoke-WebRequest -Uri $vlcBinUrl -OutFile vlc-win64.zip
+          Invoke-WebRequest -Uri $vlcSrcUrl -OutFile vlc-src.tar.xz
 
-          if ((Get-FileHash vlc.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcHash) {
-            throw "Downloaded VLC SDK checksum mismatch"
+          if ((Get-FileHash vlc-win64.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
+            throw "Downloaded VLC runtime checksum mismatch"
+          }
+
+          if ((Get-FileHash vlc-src.tar.xz -Algorithm SHA256).Hash.ToLower() -ne $vlcSrcHash) {
+            throw "Downloaded VLC source checksum mismatch"
           }
 
           Remove-Item C:\vlc-sdk -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item C:\vlc-src -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path C:\vlc-sdk | Out-Null
-          Expand-Archive -Path vlc.zip -DestinationPath C:\vlc-sdk -Force
+          New-Item -ItemType Directory -Path C:\vlc-src | Out-Null
 
-          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
-            $nestedRoot = Get-ChildItem C:\vlc-sdk -Directory |
-              Where-Object { Test-Path (Join-Path $_.FullName "sdk\include\vlc\vlc.h") } |
-              Select-Object -First 1
+          Expand-Archive -Path vlc-win64.zip -DestinationPath C:\vlc-sdk -Force
+          tar -xf vlc-src.tar.xz -C C:\vlc-src
 
-            if ($nestedRoot) {
-              Get-ChildItem $nestedRoot.FullName -Force | Move-Item -Destination C:\vlc-sdk -Force
-              Remove-Item $nestedRoot.FullName -Recurse -Force
-            }
+          $runtimeRoot = Get-ChildItem C:\vlc-sdk -Directory | Select-Object -First 1
+          if (-not $runtimeRoot) {
+            throw "Expanded VLC runtime directory not found"
           }
 
-          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
+          Get-ChildItem $runtimeRoot.FullName -Force | Move-Item -Destination C:\vlc-sdk -Force
+          Remove-Item $runtimeRoot.FullName -Recurse -Force
+
+          $sourceRoot = Get-ChildItem C:\vlc-src -Directory | Select-Object -First 1
+          if (-not $sourceRoot) {
+            throw "Expanded VLC source directory not found"
+          }
+
+          New-Item -ItemType Directory -Path C:\vlc-sdk\include | Out-Null
+          Copy-Item -Path (Join-Path $sourceRoot.FullName "include\vlc") `
+            -Destination C:\vlc-sdk\include -Recurse -Force
+
+          @"
+#ifndef LIBVLC_VERSION_H
+# define LIBVLC_VERSION_H 1
+# define LIBVLC_VERSION_MAJOR    (3)
+# define LIBVLC_VERSION_MINOR    (0)
+# define LIBVLC_VERSION_REVISION (21)
+# define LIBVLC_VERSION_EXTRA    (0)
+# define LIBVLC_VERSION(maj,min,rev,extra) \
+         ((maj << 24) | (min << 16) | (rev << 8) | (extra))
+# define LIBVLC_VERSION_INT \
+         LIBVLC_VERSION(LIBVLC_VERSION_MAJOR, LIBVLC_VERSION_MINOR, \
+                        LIBVLC_VERSION_REVISION, LIBVLC_VERSION_EXTRA)
+#endif
+"@ | Set-Content -Path C:\vlc-sdk\include\vlc\libvlc_version.h -Encoding ASCII
+
+          New-Item -ItemType Directory -Path C:\vlc-sdk\lib | Out-Null
+          $exports = (& dumpbin /exports C:\vlc-sdk\libvlc.dll) |
+            Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([^\s=]+)' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value } |
+            Sort-Object -Unique
+
+          if (-not $exports) {
+            throw "Failed to extract exports from libvlc.dll"
+          }
+
+          @("LIBRARY libvlc", "EXPORTS") + $exports |
+            Set-Content -Path C:\vlc-sdk\lib\libvlc.def -Encoding ASCII
+
+          & lib /def:C:\vlc-sdk\lib\libvlc.def /machine:x64 /out:C:\vlc-sdk\lib\libvlc.lib | Out-Host
+
+          if (-not (Test-Path C:\vlc-sdk\include\vlc\vlc.h)) {
             throw "libVLC headers not found under C:\vlc-sdk"
+          }
+
+          if (-not (Test-Path C:\vlc-sdk\lib\libvlc.lib)) {
+            throw "libVLC import library was not generated"
           }
 
       - name: Build
@@ -117,7 +168,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DCMAKE_C_COMPILER=cl ^
             -DCMAKE_CXX_COMPILER=cl ^
-            -DCMAKE_PREFIX_PATH=%Qt6_DIR% ^
+            -DCMAKE_PREFIX_PATH=%QT_ROOT_DIR% ^
             -DVLC_DIR=C:\vlc-sdk
           cmake --build .
 
@@ -125,16 +176,16 @@ jobs:
         shell: cmd
         run: |
           cd build
-          windeployqt.exe --release viewer.exe
-          copy C:\vlc-sdk\libvlc.dll .
-          copy C:\vlc-sdk\libvlccore.dll .
-          xcopy C:\vlc-sdk\plugins plugins\ /E /I /Y
+          if exist dist rmdir /S /Q dist
+          mkdir dist
+          copy viewer.exe dist\
+          "%QT_ROOT_DIR%\bin\windeployqt.exe" --release --compiler-runtime dist\viewer.exe
+          copy C:\vlc-sdk\libvlc.dll dist\
+          copy C:\vlc-sdk\libvlccore.dll dist\
+          xcopy C:\vlc-sdk\plugins dist\plugins\ /E /I /Y
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ZiiLabViewer-Windows
-          path: |
-            build/viewer.exe
-            build/*.dll
-            build/plugins/
+          path: build/dist/
