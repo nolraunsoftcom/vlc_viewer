@@ -18,9 +18,6 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QTextBlock>
-#include <QFileDialog>
-#include <QStandardPaths>
-#include <QIcon>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
@@ -208,24 +205,6 @@ void MainWindow::setupSidebar(QWidget *parent)
     auto *layout = new QVBoxLayout(parent);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-
-    // 로고 영역 (아이콘 + 제품명)
-    auto *logoBox = new QWidget(parent);
-    logoBox->setFixedHeight(96);
-    logoBox->setStyleSheet("background-color: #111; border-bottom: 1px solid #333;");
-    auto *logoLayout = new QHBoxLayout(logoBox);
-    logoLayout->setContentsMargins(12, 8, 12, 8);
-    logoLayout->setSpacing(10);
-
-    m_sidebarLogo = new QLabel(logoBox);
-    m_sidebarLogo->setFixedSize(72, 72);
-    m_sidebarLogo->setScaledContents(false);
-    m_sidebarLogo->setAlignment(Qt::AlignCenter);
-    m_sidebarLogo->setStyleSheet("background: transparent;");
-    logoLayout->addWidget(m_sidebarLogo);
-    logoLayout->addStretch();
-    layout->addWidget(logoBox);
-    refreshLogo();
 
     auto *header = new QWidget(parent);
     header->setFixedHeight(HEADER_HEIGHT);
@@ -441,35 +420,6 @@ void MainWindow::setupRightPanel(QWidget *parent)
 
     connect(m_colBtnGroup, &QButtonGroup::idClicked, this, &MainWindow::setGridColumns);
     settingsLayout->addLayout(colBtnLayout);
-
-    // 로고 커스터마이징
-    auto *logoSection = new QLabel("로고", settingsTab);
-    logoSection->setStyleSheet("color: #888; font-size: 10px;");
-    settingsLayout->addWidget(logoSection);
-
-    auto *logoBtnLayout = new QHBoxLayout();
-    logoBtnLayout->setSpacing(4);
-
-    auto *changeLogoBtn = new QPushButton("로고 변경", settingsTab);
-    changeLogoBtn->setFixedHeight(28);
-    changeLogoBtn->setStyleSheet(
-        "QPushButton { color: white; background-color: #444; border: 1px solid #555; "
-        "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
-        "QPushButton:hover { background-color: #555; }");
-    connect(changeLogoBtn, &QPushButton::clicked, this, &MainWindow::changeLogo);
-
-    auto *resetLogoBtn = new QPushButton("기본값", settingsTab);
-    resetLogoBtn->setFixedHeight(28);
-    resetLogoBtn->setStyleSheet(
-        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
-        "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
-        "QPushButton:hover { background-color: #2a2a2a; }");
-    connect(resetLogoBtn, &QPushButton::clicked, this, &MainWindow::resetLogo);
-
-    logoBtnLayout->addWidget(changeLogoBtn);
-    logoBtnLayout->addWidget(resetLogoBtn);
-    settingsLayout->addLayout(logoBtnLayout);
-
     settingsLayout->addStretch();
     m_rightTabs->addTab(settingsTab, "설정");
 
@@ -761,70 +711,4 @@ void MainWindow::updateGridCellSizes()
     for (auto *label : m_emptyLabels) {
         label->setFixedHeight(cellHeight);
     }
-}
-
-// ============================================================
-// 로고 (기본값 + 사용자 커스텀)
-// ============================================================
-
-QString MainWindow::customLogoPath()
-{
-    return QDir::homePath() + "/.ziilab/logo.png";
-}
-
-QPixmap MainWindow::loadLogo()
-{
-    const QString userPath = customLogoPath();
-    QPixmap pm;
-    if (QFile::exists(userPath) && pm.load(userPath) && !pm.isNull()) {
-        return pm;
-    }
-    pm.load(":/logo.png");
-    return pm;
-}
-
-void MainWindow::refreshLogo()
-{
-    if (!m_sidebarLogo) return;
-    QPixmap pm = loadLogo();
-    if (pm.isNull()) return;
-    m_sidebarLogo->setPixmap(pm.scaled(m_sidebarLogo->size(),
-        Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    setWindowIcon(QIcon(pm));
-}
-
-void MainWindow::changeLogo()
-{
-    QString picker = QFileDialog::getOpenFileName(this, "로고 이미지 선택",
-        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
-        "Images (*.png *.jpg *.jpeg *.bmp *.svg)");
-    if (picker.isEmpty()) return;
-
-    QPixmap test;
-    if (!test.load(picker) || test.isNull()) {
-        appendLog(QString("로고 로드 실패: %1").arg(picker), LogLevel::ERROR);
-        return;
-    }
-
-    const QString dir = QDir::homePath() + "/.ziilab";
-    QDir().mkpath(dir);
-    const QString dest = customLogoPath();
-
-    QFile::remove(dest);
-    if (!QFile::copy(picker, dest)) {
-        appendLog(QString("로고 저장 실패: %1").arg(dest), LogLevel::ERROR);
-        return;
-    }
-    appendLog(QString("로고 변경됨: %1").arg(picker), LogLevel::INFO);
-    refreshLogo();
-}
-
-void MainWindow::resetLogo()
-{
-    const QString dest = customLogoPath();
-    if (QFile::exists(dest)) {
-        QFile::remove(dest);
-        appendLog("로고 기본값으로 복원", LogLevel::INFO);
-    }
-    refreshLogo();
 }

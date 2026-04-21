@@ -41,7 +41,7 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
-    app.setWindowIcon(QIcon(MainWindow::loadLogo()));
+    app.setWindowIcon(QIcon(":/logo.png"));
 
 #if defined(__APPLE__)
     QString pluginPath;

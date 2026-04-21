@@ -68,8 +68,8 @@
   "hotPaths": [
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 8,
-      "lastAccessed": 1776757711816,
+      "accessCount": 12,
+      "lastAccessed": 1776757951332,
       "type": "file"
     },
     {
@@ -80,8 +80,8 @@
     },
     {
       "path": "src/main.cpp",
-      "accessCount": 6,
-      "lastAccessed": 1776757726962,
+      "accessCount": 7,
+      "lastAccessed": 1776757960387,
       "type": "file"
     },
     {
