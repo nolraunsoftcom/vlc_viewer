@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QLabel>
 #include <QPushButton>
+#include <QPointer>
 #include <QTimer>
 #include <QDateTime>
 #include <QFuture>
@@ -54,6 +55,8 @@ public:
     RecState recState() const { return m_recState; }
     QString recordingPath() const { return m_recordingPath; }
     QDateTime recordingStartTime() const { return m_recordingStartTime; }
+    void setSourceViewer(VlcWidget *viewer) { m_sourceViewer = viewer; }
+    VlcWidget *sourceViewer() const { return m_sourceViewer.data(); }
 
 public slots:
     void updateRecordUi();
@@ -69,7 +72,7 @@ signals:
     void recordingStateChanged(VlcWidget *w, VlcWidget::RecState newState);       // 즉시 UI 용
     void recordingStarted(VlcWidget *w, const QString &path);                      // 로깅: Active 확정
     void recordingStopped(VlcWidget *w, const QString &path,
-                          qint64 bytes, int durationSec, bool byDisconnect);       // 로깅: flush 완료
+                          qint64 bytes, int durationSec, bool byDisconnect);       // 로깅: flush 완료, durationSec 는 중지 시점 기준
     void recordingFailed(VlcWidget *w, const QString &path, const QString &reason);
 
 protected:
@@ -101,6 +104,7 @@ private:
     QString m_recordingPath;
     QDateTime m_recordingStartTime;
     int m_recWatchdogAttempts = 0;
+    QPointer<VlcWidget> m_sourceViewer;
 
     // UI 성능: stylesheet 반복 재적용 방지용 캐시 (-1 = 아직 미적용)
     int m_lastDisplayedRec = -1;

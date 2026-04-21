@@ -123,7 +123,8 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
             // 해당 그리드 뷰어를 소스로 하는 orphan 전체화면 탭 정리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
                 auto *tabWidget = m_videoTabs->widget(i);
-                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(v)) {
+                if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
+                    fullViewer && fullViewer->sourceViewer() == v) {
                     closeVideoTab(i);
                 }
             }
@@ -515,7 +516,8 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     // 이미 열려있으면 해당 탭으로 전환
     for (int i = 1; i < m_videoTabs->count(); ++i) {
         auto *tabWidget = m_videoTabs->widget(i);
-        if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+        if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
+            fullViewer && fullViewer->sourceViewer() == viewer) {
             m_videoTabs->setCurrentIndex(i);
             return;
         }
@@ -524,7 +526,7 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     // 그리드 원본은 유지 — 탭엔 동일 URL의 독립 스트림을 띄움
     auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
     fullViewer->setFullscreenMode(true);
-    fullViewer->setProperty("sourceViewer", QVariant::fromValue(reinterpret_cast<quintptr>(viewer)));
+    fullViewer->setSourceViewer(viewer);
     fullViewer->setLogCallback([this](const QString &msg, int level) {
         appendLog(msg, static_cast<LogLevel>(level));
     });
@@ -672,7 +674,8 @@ void MainWindow::removeSelectedChannel()
             // orphan 전체화면 탭 정리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
                 auto *tabWidget = m_videoTabs->widget(i);
-                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+                if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
+                    fullViewer && fullViewer->sourceViewer() == viewer) {
                     closeVideoTab(i);
                 }
             }

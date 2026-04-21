@@ -634,8 +634,7 @@ QString VlcWidget::makeRecordingPath() const
 VlcWidget *VlcWidget::recordingTarget()
 {
     if (m_isFullscreen) {
-        quintptr ptr = property("sourceViewer").value<quintptr>();
-        return reinterpret_cast<VlcWidget *>(ptr);
+        return m_sourceViewer.data();
     }
     return this;
 }
@@ -780,6 +779,7 @@ void VlcWidget::stopRecordingInternal(RecStopReason reason)
 
     const QString path = m_recordingPath;
     const QDateTime start = m_recordingStartTime;
+    const QDateTime stoppedAt = QDateTime::currentDateTime();
     const bool wasActive = (m_recState == RecState::Active);
     const bool byDisc = (reason == RecStopReason::Disconnect);
     const bool isRemove = (reason == RecStopReason::Remove);
@@ -787,7 +787,7 @@ void VlcWidget::stopRecordingInternal(RecStopReason reason)
     m_recordingPath.clear();
     setRecState(RecState::Idle);
 
-    // 현재 (녹화중) 플레이어 cleanup → MP4 flush future
+    // 현재 녹화중 플레이어 cleanup → 파일 finalizer 완료를 future 로 추적
     QFuture<void> flushFuture = cleanupPlayer();
 
     // 재생 복구는 Manual 일 때만
@@ -802,9 +802,10 @@ void VlcWidget::stopRecordingInternal(RecStopReason reason)
     if (wasActive) {
         auto *watcher = new QFutureWatcher<void>(this);
         connect(watcher, &QFutureWatcher<void>::finished, this,
-            [this, path, start, byDisc, watcher]() {
+            [this, path, start, stoppedAt, byDisc, watcher]() {
                 qint64 bytes = QFileInfo(path).size();
-                int dur = start.secsTo(QDateTime::currentDateTime());
+                int dur = start.secsTo(stoppedAt);
+                if (dur < 0) dur = 0;
                 log(QString("[%1] Recording stopped%2: %3 (%4, %5s)")
                     .arg(m_name, byDisc ? " (disconnect)" : "", path, humanSize(bytes))
                     .arg(dur), 1);
