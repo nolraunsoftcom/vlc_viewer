@@ -24,6 +24,9 @@
 #include <QFileInfoList>
 #include <QMessageBox>
 #include <QProcess>
+#include <QImageReader>
+#include <QPainter>
+#include <QStyle>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
@@ -805,15 +808,28 @@ void MainWindow::setupFilesTab(QWidget *parent)
     }
     typeLayout->addStretch();
 
+    const QString iconBtnStyle =
+        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
+        "border-radius: 3px; font-size: 13px; }"
+        "QPushButton:hover { background-color: #2a2a2a; }";
+
     auto *refreshBtn = new QPushButton("↻", parent);
     refreshBtn->setFixedSize(28, 28);
     refreshBtn->setToolTip("새로고침");
-    refreshBtn->setStyleSheet(
-        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
-        "border-radius: 3px; font-size: 13px; }"
-        "QPushButton:hover { background-color: #2a2a2a; }");
+    refreshBtn->setStyleSheet(iconBtnStyle);
     connect(refreshBtn, &QPushButton::clicked, this, &MainWindow::refreshFilesList);
     typeLayout->addWidget(refreshBtn);
+
+    auto *openDirBtn = new QPushButton("📁", parent);
+    openDirBtn->setFixedSize(28, 28);
+    openDirBtn->setToolTip("폴더 열기");
+    openDirBtn->setStyleSheet(iconBtnStyle);
+    connect(openDirBtn, &QPushButton::clicked, this, [this]() {
+        QString dir = currentFilesDir();
+        QDir().mkpath(dir);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
+    typeLayout->addWidget(openDirBtn);
 
     layout->addLayout(typeLayout);
 
@@ -821,10 +837,15 @@ void MainWindow::setupFilesTab(QWidget *parent)
 
     // 파일 목록
     m_filesList = new QListWidget(parent);
+    m_filesList->setIconSize(QSize(64, 48));
+    m_filesList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_filesList->setWordWrap(true);
+    m_filesList->setTextElideMode(Qt::ElideNone);
+    m_filesList->setResizeMode(QListView::Adjust);
     m_filesList->setStyleSheet(
         "QListWidget { background-color: #1a1a1a; color: #ccc; border: 1px solid #333; "
         "font-size: 11px; outline: none; }"
-        "QListWidget::item { padding: 6px 8px; border-bottom: 1px solid #222; }"
+        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #222; }"
         "QListWidget::item:selected { background-color: #2a3a5a; color: white; }"
         "QListWidget::item:hover { background-color: #222; }");
     m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -844,6 +865,50 @@ void MainWindow::setFileType(int type)
     refreshFilesList();
 }
 
+static QIcon makeImageThumb(const QString &path, const QSize &target)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    QSize orig = reader.size();
+    if (orig.isValid()) {
+        QSize scaled = orig.scaled(target, Qt::KeepAspectRatio);
+        reader.setScaledSize(scaled);
+    }
+    QImage img = reader.read();
+    if (img.isNull()) return {};
+    return QIcon(QPixmap::fromImage(img));
+}
+
+static QIcon makeVideoThumb(const QSize &target)
+{
+    // 필름 스트립 스타일의 플레이스홀더
+    QPixmap pm(target);
+    pm.fill(QColor("#2a2a2a"));
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // 필름 스트립 양옆 구멍
+    p.setBrush(QColor("#111"));
+    p.setPen(Qt::NoPen);
+    int h = target.height();
+    int w = target.width();
+    int holeW = 6, holeH = 4, gap = 2;
+    for (int y = 4; y + holeH <= h - 4; y += holeH + gap) {
+        p.drawRect(3, y, holeW, holeH);
+        p.drawRect(w - 3 - holeW, y, holeW, holeH);
+    }
+
+    // 중앙 플레이 삼각형
+    p.setBrush(QColor("#8cb4ff"));
+    int cx = w / 2, cy = h / 2, r = h / 4;
+    QPolygon tri;
+    tri << QPoint(cx - r + 2, cy - r)
+        << QPoint(cx - r + 2, cy + r)
+        << QPoint(cx + r + 2, cy);
+    p.drawPolygon(tri);
+    return QIcon(pm);
+}
+
 void MainWindow::refreshFilesList()
 {
     if (!m_filesList) return;
@@ -852,9 +917,13 @@ void MainWindow::refreshFilesList()
     QDir dir(currentFilesDir());
     if (!dir.exists()) return;
 
-    QStringList filters = m_currentFileType == 1
+    const bool isVideo = (m_currentFileType == 1);
+    QStringList filters = isVideo
         ? QStringList{"*.mp4", "*.mkv", "*.mov"}
         : QStringList{"*.png", "*.jpg", "*.jpeg"};
+
+    const QSize iconSize = m_filesList->iconSize();
+    QIcon videoThumb; // 비디오용 공용 플레이스홀더 (한 번만 생성)
 
     auto entries = dir.entryInfoList(filters, QDir::Files, QDir::Time);
     for (const auto &info : entries) {
@@ -869,9 +938,18 @@ void MainWindow::refreshFilesList()
             size = QString("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
 
         auto *item = new QListWidgetItem(
-            QString("%1\n  %2  ·  %3").arg(info.fileName(), when, size));
+            QString("%1\n%2\n%3").arg(info.fileName(), when, size));
         item->setData(Qt::UserRole, info.absoluteFilePath());
         item->setToolTip(info.absoluteFilePath());
+
+        if (isVideo) {
+            if (videoThumb.isNull()) videoThumb = makeVideoThumb(iconSize);
+            item->setIcon(videoThumb);
+        } else {
+            QIcon thumb = makeImageThumb(info.absoluteFilePath(), iconSize);
+            if (!thumb.isNull()) item->setIcon(thumb);
+        }
+
         m_filesList->addItem(item);
     }
 }
