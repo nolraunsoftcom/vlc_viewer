@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QIcon>
 #include <vlc/vlc.h>
 #include <cstdlib>
 #include <QThreadPool>
@@ -40,6 +41,7 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    app.setWindowIcon(QIcon(MainWindow::loadLogo()));
 
 #if defined(__APPLE__)
     QString pluginPath;
@@ -60,7 +62,6 @@ int main(int argc, char *argv[])
         "--reset-plugins-cache",
         "--network-caching=500",
         "--live-caching=500",
-        "--rtsp-caching=500",
         "--clock-jitter=0",
         "--clock-synchro=0",
         "--avcodec-hurry-up",

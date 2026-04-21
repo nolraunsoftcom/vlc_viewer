@@ -112,10 +112,12 @@ cmake --build . --config Release
 # Qt DLL 배포
 C:\Qt\6.11.0\msvc2022_64\bin\windeployqt.exe Release\viewer.exe
 
-# VLC DLL 복사
-copy C:\vlc-sdk\libvlc.dll Release\
-copy C:\vlc-sdk\libvlccore.dll Release\
+# VLC 런타임 전체 복사 (루트 DLL + plugins + 필요 지원 디렉터리)
+copy C:\vlc-sdk\*.dll Release\
+copy C:\vlc-sdk\plugins.dat Release\
 xcopy C:\vlc-sdk\plugins Release\plugins\ /E
+if (Test-Path C:\vlc-sdk\lua) { xcopy C:\vlc-sdk\lua Release\lua\ /E /I /Y }
+if (Test-Path C:\vlc-sdk\locale) { xcopy C:\vlc-sdk\locale Release\locale\ /E /I /Y }
 ```
 
 ### Linux

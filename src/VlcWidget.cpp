@@ -363,11 +363,6 @@ VlcWidget::Stats VlcWidget::getStats() const
     return s;
 }
 
-void VlcWidget::reattachVideoOutput()
-{
-    attachToSurface();
-}
-
 void VlcWidget::mouseDoubleClickEvent(QMouseEvent *event)
 {
     if (event->button() != Qt::LeftButton) return;

@@ -4,6 +4,7 @@ project(viewer VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets Concurrent)
 
@@ -45,6 +46,9 @@ message(STATUS "Using libVLC library: ${VLC_LIBRARY}")
 # ============================================================
 # 실행 파일
 # ============================================================
+set(APP_ICON_MACOS "${CMAKE_SOURCE_DIR}/resources/logo.icns")
+set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
 if(APPLE)
     add_executable(viewer MACOSX_BUNDLE
         src/main.cpp
@@ -52,6 +56,8 @@ if(APPLE)
         src/VlcWidget.cpp
         src/ConnectionDialog.cpp
         src/StatusBar.cpp
+        resources/resources.qrc
+        ${APP_ICON_MACOS}
     )
 else()
     add_executable(viewer
@@ -60,6 +66,7 @@ else()
         src/VlcWidget.cpp
         src/ConnectionDialog.cpp
         src/StatusBar.cpp
+        resources/resources.qrc
     )
 endif()
 
@@ -72,5 +79,6 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.nolsoft.ziilab.viewer"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_ICON_FILE "logo.icns"
     )
 endif()

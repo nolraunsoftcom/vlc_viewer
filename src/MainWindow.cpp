@@ -18,6 +18,9 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QTextBlock>
+#include <QFileDialog>
+#include <QStandardPaths>
+#include <QIcon>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
@@ -105,11 +108,11 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
         if (idx >= 0) {
             QString chName = v->name();
 
-            // 전체화면 탭에서 동일 뷰어가 호스팅 중이면 분리
+            // 해당 그리드 뷰어를 소스로 하는 orphan 전체화면 탭 정리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                if (m_videoTabs->widget(i) == v) {
-                    m_videoTabs->removeTab(i);
-                    break;
+                auto *tabWidget = m_videoTabs->widget(i);
+                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(v)) {
+                    closeVideoTab(i);
                 }
             }
 
@@ -205,6 +208,24 @@ void MainWindow::setupSidebar(QWidget *parent)
     auto *layout = new QVBoxLayout(parent);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+
+    // 로고 영역 (아이콘 + 제품명)
+    auto *logoBox = new QWidget(parent);
+    logoBox->setFixedHeight(96);
+    logoBox->setStyleSheet("background-color: #111; border-bottom: 1px solid #333;");
+    auto *logoLayout = new QHBoxLayout(logoBox);
+    logoLayout->setContentsMargins(12, 8, 12, 8);
+    logoLayout->setSpacing(10);
+
+    m_sidebarLogo = new QLabel(logoBox);
+    m_sidebarLogo->setFixedSize(72, 72);
+    m_sidebarLogo->setScaledContents(false);
+    m_sidebarLogo->setAlignment(Qt::AlignCenter);
+    m_sidebarLogo->setStyleSheet("background: transparent;");
+    logoLayout->addWidget(m_sidebarLogo);
+    logoLayout->addStretch();
+    layout->addWidget(logoBox);
+    refreshLogo();
 
     auto *header = new QWidget(parent);
     header->setFixedHeight(HEADER_HEIGHT);
@@ -420,6 +441,35 @@ void MainWindow::setupRightPanel(QWidget *parent)
 
     connect(m_colBtnGroup, &QButtonGroup::idClicked, this, &MainWindow::setGridColumns);
     settingsLayout->addLayout(colBtnLayout);
+
+    // 로고 커스터마이징
+    auto *logoSection = new QLabel("로고", settingsTab);
+    logoSection->setStyleSheet("color: #888; font-size: 10px;");
+    settingsLayout->addWidget(logoSection);
+
+    auto *logoBtnLayout = new QHBoxLayout();
+    logoBtnLayout->setSpacing(4);
+
+    auto *changeLogoBtn = new QPushButton("로고 변경", settingsTab);
+    changeLogoBtn->setFixedHeight(28);
+    changeLogoBtn->setStyleSheet(
+        "QPushButton { color: white; background-color: #444; border: 1px solid #555; "
+        "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
+        "QPushButton:hover { background-color: #555; }");
+    connect(changeLogoBtn, &QPushButton::clicked, this, &MainWindow::changeLogo);
+
+    auto *resetLogoBtn = new QPushButton("기본값", settingsTab);
+    resetLogoBtn->setFixedHeight(28);
+    resetLogoBtn->setStyleSheet(
+        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
+        "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
+        "QPushButton:hover { background-color: #2a2a2a; }");
+    connect(resetLogoBtn, &QPushButton::clicked, this, &MainWindow::resetLogo);
+
+    logoBtnLayout->addWidget(changeLogoBtn);
+    logoBtnLayout->addWidget(resetLogoBtn);
+    settingsLayout->addLayout(logoBtnLayout);
+
     settingsLayout->addStretch();
     m_rightTabs->addTab(settingsTab, "설정");
 
@@ -473,23 +523,25 @@ void MainWindow::setGridColumns(int cols)
 
 void MainWindow::openFullscreenTab(VlcWidget *viewer)
 {
-    // 이미 전체화면 탭에 있으면 해당 탭으로 전환
+    // 이미 열려있으면 해당 탭으로 전환
     for (int i = 1; i < m_videoTabs->count(); ++i) {
-        if (m_videoTabs->widget(i) == viewer) {
+        auto *tabWidget = m_videoTabs->widget(i);
+        if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
             m_videoTabs->setCurrentIndex(i);
             return;
         }
     }
 
-    // 기존 스트림을 그대로 탭으로 이동 (리페어런트)
-    viewer->setFullscreenMode(true);
-    // 그리드 셀 크기 고정을 해제해 탭에서 풀사이즈 렌더 허용
-    viewer->setMinimumHeight(0);
-    viewer->setMaximumHeight(QWIDGETSIZE_MAX);
+    // 그리드 원본은 유지 — 탭엔 동일 URL의 독립 스트림을 띄움
+    auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
+    fullViewer->setFullscreenMode(true);
+    fullViewer->setProperty("sourceViewer", QVariant::fromValue(reinterpret_cast<quintptr>(viewer)));
+    fullViewer->setLogCallback([this](const QString &msg, int level) {
+        appendLog(msg, static_cast<LogLevel>(level));
+    });
+    fullViewer->play(viewer->url(), viewer->name());
 
-    int tabIndex = m_videoTabs->addTab(viewer, "");
-    // 리페어런트로 native handle이 갱신될 수 있으므로 VLC 출력 재연결
-    viewer->reattachVideoOutput();
+    int tabIndex = m_videoTabs->addTab(fullViewer, "");
 
     auto *tabLabel = new QLabel(viewer->name());
     tabLabel->setStyleSheet("color: #ccc; font-size: 11px; padding-left: 8px;");
@@ -501,9 +553,9 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         "QPushButton { color: #666; background: transparent; border: none; "
         "font-size: 12px; padding: 0; margin: 0; }"
         "QPushButton:hover { color: #ccc; background-color: #444; border-radius: 3px; }");
-    connect(closeBtn, &QPushButton::clicked, this, [this, viewer]() {
+    connect(closeBtn, &QPushButton::clicked, this, [this, fullViewer]() {
         for (int i = 1; i < m_videoTabs->count(); ++i) {
-            if (m_videoTabs->widget(i) == viewer) {
+            if (m_videoTabs->widget(i) == fullViewer) {
                 closeVideoTab(i);
                 return;
             }
@@ -512,9 +564,6 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     m_videoTabs->tabBar()->setTabButton(tabIndex, QTabBar::RightSide, closeBtn);
     m_videoTabs->setCurrentIndex(tabIndex);
 
-    // 그리드에 빈 자리가 생기므로 재배치
-    rebuildGrid();
-
     appendLog(QString("Fullscreen: %1").arg(viewer->name()), LogLevel::DEBUG);
 }
 
@@ -522,27 +571,15 @@ void MainWindow::closeVideoTab(int index)
 {
     if (index == 0) return;
 
-    auto *widget = m_videoTabs->widget(index);
+    auto *widget = qobject_cast<VlcWidget *>(m_videoTabs->widget(index));
     m_videoTabs->removeTab(index);
 
-    auto *viewer = qobject_cast<VlcWidget *>(widget);
-    if (!viewer) {
-        if (widget) widget->deleteLater();
-        return;
+    if (widget) {
+        widget->stop();
+        widget->deleteLater();
     }
 
-    // 관리 중인 뷰어면 그리드로 복귀, 아니면 파기
-    if (m_viewers.contains(viewer)) {
-        viewer->setFullscreenMode(false);
-        viewer->setParent(m_gridWidget);
-        rebuildGrid();
-        // 다시 리페어런트 되었으므로 VLC 출력 재연결
-        viewer->reattachVideoOutput();
-        appendLog("Returned to grid", LogLevel::DEBUG);
-    } else {
-        viewer->stop();
-        viewer->deleteLater();
-    }
+    appendLog("Returned to grid", LogLevel::DEBUG);
 }
 
 // ============================================================
@@ -635,11 +672,11 @@ void MainWindow::removeSelectedChannel()
             auto *viewer = m_viewers[row];
             QString chName = viewer->name();
 
-            // 전체화면 탭 호스팅 중이면 먼저 분리
+            // orphan 전체화면 탭 정리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                if (m_videoTabs->widget(i) == viewer) {
-                    m_videoTabs->removeTab(i);
-                    break;
+                auto *tabWidget = m_videoTabs->widget(i);
+                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+                    closeVideoTab(i);
                 }
             }
 
@@ -664,23 +701,15 @@ void MainWindow::rebuildGrid()
     qDeleteAll(m_emptyLabels);
     m_emptyLabels.clear();
 
-    // 전체화면으로 탭에 이동한 뷰어는 건드리지 않음 (부모가 m_gridWidget이 아님)
     for (auto *viewer : m_viewers) {
-        if (viewer->parentWidget() == m_gridWidget) {
-            m_grid->removeWidget(viewer);
-            viewer->hide();
-        }
+        m_grid->removeWidget(viewer);
+        viewer->hide();
     }
 
     delete m_grid;
     m_grid = new QGridLayout(m_gridWidget);
     m_grid->setSpacing(1);
     m_grid->setContentsMargins(0, 0, 0, 0);
-
-    QVector<VlcWidget *> visible;
-    for (auto *v : m_viewers) {
-        if (!v->isFullscreenMode()) visible.append(v);
-    }
 
     int count = m_viewers.size();
     if (count == 0) return;
@@ -691,13 +720,12 @@ void MainWindow::rebuildGrid()
 
     for (int c = 0; c < cols; ++c) m_grid->setColumnStretch(c, 1);
 
-    int visibleCount = visible.size();
-    for (int i = 0; i < visibleCount; ++i) {
-        m_grid->addWidget(visible[i], i / cols, i % cols);
-        visible[i]->show();
+    for (int i = 0; i < count; ++i) {
+        m_grid->addWidget(m_viewers[i], i / cols, i % cols);
+        m_viewers[i]->show();
     }
 
-    for (int i = visibleCount; i < totalCells; ++i) {
+    for (int i = count; i < totalCells; ++i) {
         auto *label = new QLabel("No Stream", m_gridWidget);
         label->setAlignment(Qt::AlignCenter);
         label->setStyleSheet("color: #444; font-size: 13px; background-color: #111;");
@@ -728,11 +756,75 @@ void MainWindow::updateGridCellSizes()
     int cellHeight = cellWidth * 3 / 4 + infoBarHeight;
 
     for (auto *viewer : m_viewers) {
-        // 전체화면 상태인 뷰어는 탭에서 풀사이즈로 써야 하므로 고정 크기 배제
-        if (viewer->isFullscreenMode()) continue;
         viewer->setFixedHeight(cellHeight);
     }
     for (auto *label : m_emptyLabels) {
         label->setFixedHeight(cellHeight);
     }
+}
+
+// ============================================================
+// 로고 (기본값 + 사용자 커스텀)
+// ============================================================
+
+QString MainWindow::customLogoPath()
+{
+    return QDir::homePath() + "/.ziilab/logo.png";
+}
+
+QPixmap MainWindow::loadLogo()
+{
+    const QString userPath = customLogoPath();
+    QPixmap pm;
+    if (QFile::exists(userPath) && pm.load(userPath) && !pm.isNull()) {
+        return pm;
+    }
+    pm.load(":/logo.png");
+    return pm;
+}
+
+void MainWindow::refreshLogo()
+{
+    if (!m_sidebarLogo) return;
+    QPixmap pm = loadLogo();
+    if (pm.isNull()) return;
+    m_sidebarLogo->setPixmap(pm.scaled(m_sidebarLogo->size(),
+        Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    setWindowIcon(QIcon(pm));
+}
+
+void MainWindow::changeLogo()
+{
+    QString picker = QFileDialog::getOpenFileName(this, "로고 이미지 선택",
+        QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
+        "Images (*.png *.jpg *.jpeg *.bmp *.svg)");
+    if (picker.isEmpty()) return;
+
+    QPixmap test;
+    if (!test.load(picker) || test.isNull()) {
+        appendLog(QString("로고 로드 실패: %1").arg(picker), LogLevel::ERROR);
+        return;
+    }
+
+    const QString dir = QDir::homePath() + "/.ziilab";
+    QDir().mkpath(dir);
+    const QString dest = customLogoPath();
+
+    QFile::remove(dest);
+    if (!QFile::copy(picker, dest)) {
+        appendLog(QString("로고 저장 실패: %1").arg(dest), LogLevel::ERROR);
+        return;
+    }
+    appendLog(QString("로고 변경됨: %1").arg(picker), LogLevel::INFO);
+    refreshLogo();
+}
+
+void MainWindow::resetLogo()
+{
+    const QString dest = customLogoPath();
+    if (QFile::exists(dest)) {
+        QFile::remove(dest);
+        appendLog("로고 기본값으로 복원", LogLevel::INFO);
+    }
+    refreshLogo();
 }

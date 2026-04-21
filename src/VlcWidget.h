@@ -29,7 +29,6 @@ public:
     bool autoReconnect() const { return m_autoReconnect; }
     void setFullscreenMode(bool fs) { m_isFullscreen = fs; }
     bool isFullscreenMode() const { return m_isFullscreen; }
-    void reattachVideoOutput();
     void stop();
     bool isPlaying() const;
     QString url() const { return m_url; }

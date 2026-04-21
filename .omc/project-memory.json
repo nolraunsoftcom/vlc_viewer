@@ -67,9 +67,27 @@
   },
   "hotPaths": [
     {
+      "path": "src/MainWindow.cpp",
+      "accessCount": 8,
+      "lastAccessed": 1776757711816,
+      "type": "file"
+    },
+    {
       "path": "src/main.cpp",
-      "accessCount": 3,
-      "lastAccessed": 1776756503519,
+      "accessCount": 6,
+      "lastAccessed": 1776757726962,
+      "type": "file"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "accessCount": 4,
+      "lastAccessed": 1776757616685,
+      "type": "file"
+    },
+    {
+      "path": "src/MainWindow.h",
+      "accessCount": 4,
+      "lastAccessed": 1776757648537,
       "type": "file"
     },
     {
@@ -89,6 +107,12 @@
       "accessCount": 1,
       "lastAccessed": 1776756459984,
       "type": "directory"
+    },
+    {
+      "path": "resources/resources.qrc",
+      "accessCount": 1,
+      "lastAccessed": 1776757581211,
+      "type": "file"
     }
   ],
   "userDirectives": []

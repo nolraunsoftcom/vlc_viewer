@@ -9,6 +9,7 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QButtonGroup>
+#include <QPixmap>
 #include <vlc/vlc.h>
 #include "ConnectionDialog.h"
 
@@ -27,10 +28,15 @@ public:
 
     void appendLog(const QString &message, LogLevel level = LogLevel::INFO);
 
+    static QString customLogoPath();
+    static QPixmap loadLogo();
+
 private slots:
     void addChannel();
     void removeSelectedChannel();
     void setGridColumns(int cols);
+    void changeLogo();
+    void resetLogo();
 
 private:
     libvlc_instance_t *m_vlcInstance = nullptr;
@@ -53,6 +59,10 @@ private:
 
     // 상태 바
     StatusBar *m_statusBar = nullptr;
+
+    // 로고
+    QLabel *m_sidebarLogo = nullptr;
+    void refreshLogo();
 
     // 헬퍼
     VlcWidget *createViewer(const QString &name, const QString &url, bool autoReconnect = true);

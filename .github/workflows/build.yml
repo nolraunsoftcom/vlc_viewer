@@ -180,9 +180,11 @@ jobs:
           mkdir dist
           copy viewer.exe dist\
           "%QT_ROOT_DIR%\bin\windeployqt.exe" --release --compiler-runtime dist\viewer.exe
-          copy C:\vlc-sdk\libvlc.dll dist\
-          copy C:\vlc-sdk\libvlccore.dll dist\
+          copy C:\vlc-sdk\*.dll dist\
+          if exist C:\vlc-sdk\plugins.dat copy C:\vlc-sdk\plugins.dat dist\
           xcopy C:\vlc-sdk\plugins dist\plugins\ /E /I /Y
+          if exist C:\vlc-sdk\lua xcopy C:\vlc-sdk\lua dist\lua\ /E /I /Y
+          if exist C:\vlc-sdk\locale xcopy C:\vlc-sdk\locale dist\locale\ /E /I /Y
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
