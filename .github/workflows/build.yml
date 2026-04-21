@@ -133,26 +133,9 @@ jobs:
           ) | Set-Content -Path C:\vlc-sdk\include\vlc\libvlc_version.h -Encoding ASCII
 
           New-Item -ItemType Directory -Path C:\vlc-sdk\lib | Out-Null
-          $exports = (& dumpbin /exports C:\vlc-sdk\libvlc.dll) |
-            Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([^\s=]+)' |
-            ForEach-Object { $_.Matches[0].Groups[1].Value } |
-            Sort-Object -Unique
-
-          if (-not $exports) {
-            throw "Failed to extract exports from libvlc.dll"
-          }
-
-          @("LIBRARY libvlc", "EXPORTS") + $exports |
-            Set-Content -Path C:\vlc-sdk\lib\libvlc.def -Encoding ASCII
-
-          & lib /def:C:\vlc-sdk\lib\libvlc.def /machine:x64 /out:C:\vlc-sdk\lib\libvlc.lib | Out-Host
 
           if (-not (Test-Path C:\vlc-sdk\include\vlc\vlc.h)) {
             throw "libVLC headers not found under C:\vlc-sdk"
-          }
-
-          if (-not (Test-Path C:\vlc-sdk\lib\libvlc.lib)) {
-            throw "libVLC import library was not generated"
           }
 
       - name: Build
@@ -166,6 +149,22 @@ jobs:
           )
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64
           if errorlevel 1 exit /b 1
+          powershell -NoProfile -Command ^
+            "$ErrorActionPreference = 'Stop';" ^
+            "$exports = (& dumpbin /exports C:\vlc-sdk\libvlc.dll) |" ^
+            "  Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([^\s=]+)' |" ^
+            "  ForEach-Object { $_.Matches[0].Groups[1].Value } |" ^
+            "  Sort-Object -Unique;" ^
+            "if (-not $exports) { throw 'Failed to extract exports from libvlc.dll' };" ^
+            "@('LIBRARY libvlc', 'EXPORTS') + $exports |" ^
+            "  Set-Content -Path C:\vlc-sdk\lib\libvlc.def -Encoding ASCII"
+          if errorlevel 1 exit /b 1
+          lib /def:C:\vlc-sdk\lib\libvlc.def /machine:x64 /out:C:\vlc-sdk\lib\libvlc.lib
+          if errorlevel 1 exit /b 1
+          if not exist C:\vlc-sdk\lib\libvlc.lib (
+            echo libVLC import library was not generated.
+            exit /b 1
+          )
           mkdir build && cd build
           cmake .. -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
