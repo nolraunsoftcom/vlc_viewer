@@ -3,6 +3,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QMessageBox>
+#include <vector>
 #include <vlc/vlc.h>
 #include <cstdlib>
 #include <QThreadPool>
@@ -67,7 +68,7 @@ int main(int argc, char *argv[])
     }
 
     // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
-    const char *vlcArgs[] = {
+    std::vector<const char *> vlcArgs = {
         "--reset-plugins-cache",
         "--network-caching=500",
         "--live-caching=500",
@@ -76,10 +77,14 @@ int main(int argc, char *argv[])
         "--avcodec-hurry-up",
         "--avcodec-fast",
         "--no-audio",
-        "--no-videotoolbox",
     };
-    int vlcArgCount = sizeof(vlcArgs) / sizeof(vlcArgs[0]);
-    libvlc_instance_t *vlcInstance = libvlc_new(vlcArgCount, vlcArgs);
+#if defined(__APPLE__)
+    vlcArgs.push_back("--no-videotoolbox");
+#endif
+
+    libvlc_instance_t *vlcInstance = libvlc_new(
+        static_cast<int>(vlcArgs.size()),
+        vlcArgs.data());
     if (!vlcInstance) {
         QString detail = pluginPath.isEmpty()
             ? QStringLiteral("VLC plugin path not found next to the executable.")
