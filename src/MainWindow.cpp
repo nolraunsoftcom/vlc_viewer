@@ -18,6 +18,12 @@
 #include <QResizeEvent>
 #include <QScrollArea>
 #include <QTextBlock>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QFileInfo>
+#include <QFileInfoList>
+#include <QMessageBox>
+#include <QProcess>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
@@ -72,6 +78,12 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
         for (auto *viewer : m_viewers) {
             viewer->updateTime(timeStr);
         }
+        // 전체화면 탭 내 복제본 VlcWidget 도 갱신 (녹화 경과시간 동기화)
+        for (int i = 1; i < m_videoTabs->count(); ++i) {
+            if (auto *v = qobject_cast<VlcWidget *>(m_videoTabs->widget(i))) {
+                v->updateTime(timeStr);
+            }
+        }
         m_statusBar->updateStats(m_viewers);
     });
     m_clockTimer->start(1000);
@@ -124,7 +136,26 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
     });
     connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
         appendLog(QString("Snapshot: %1").arg(path), LogLevel::INFO);
+        if (m_currentFileType == 0) refreshFilesList();
     });
+    connect(viewer, &VlcWidget::recordingStarted, this,
+        [this](VlcWidget *w, const QString &path) {
+            appendLog(QString("[%1] Recording → %2").arg(w->name(), path), LogLevel::INFO);
+        });
+    connect(viewer, &VlcWidget::recordingStopped, this,
+        [this](VlcWidget *w, const QString &path, qint64 bytes, int dur, bool byDisc) {
+            double mb = bytes / (1024.0 * 1024.0);
+            appendLog(QString("[%1] Recording %2: %3 (%4 MB, %5s)")
+                .arg(w->name(), byDisc ? "auto-stopped" : "stopped", path)
+                .arg(mb, 0, 'f', 1).arg(dur),
+                byDisc ? LogLevel::WARN : LogLevel::INFO);
+            if (m_currentFileType == 1) refreshFilesList();
+        });
+    connect(viewer, &VlcWidget::recordingFailed, this,
+        [this](VlcWidget *w, const QString &path, const QString &reason) {
+            appendLog(QString("[%1] Recording failed: %2 (%3)")
+                .arg(w->name(), path, reason), LogLevel::ERROR);
+        });
     connect(viewer, &VlcWidget::statusChanged, this, [this](VlcWidget *v, VlcWidget::Status s) {
         int idx = m_viewers.indexOf(v);
         if (idx < 0 || idx >= m_channelTable->rowCount()) return;
@@ -384,6 +415,11 @@ void MainWindow::setupRightPanel(QWidget *parent)
     logLayout->addWidget(m_logView);
     m_rightTabs->addTab(logTab, "로그");
 
+    // 파일 탭
+    auto *filesTab = new QWidget();
+    setupFilesTab(filesTab);
+    m_rightTabs->addTab(filesTab, "파일");
+
     // 설정 탭
     auto *settingsTab = new QWidget();
     auto *settingsLayout = new QVBoxLayout(settingsTab);
@@ -490,6 +526,14 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         appendLog(msg, static_cast<LogLevel>(level));
     });
     fullViewer->play(viewer->url(), viewer->name());
+
+    // 원본 녹화 상태를 복제본 UI 에 즉시 반영 (이후 전이는 시그널이 릴레이)
+    connect(viewer, &VlcWidget::recordingStateChanged,
+        fullViewer, [fullViewer](VlcWidget *, VlcWidget::RecState) {
+            fullViewer->updateRecordUi();
+        });
+    // 원본이 이미 녹화 중이면 첫 전이가 없으므로 prime
+    fullViewer->updateRecordUi();
 
     int tabIndex = m_videoTabs->addTab(fullViewer, "");
 
@@ -710,5 +754,180 @@ void MainWindow::updateGridCellSizes()
     }
     for (auto *label : m_emptyLabels) {
         label->setFixedHeight(cellHeight);
+    }
+}
+
+// ============================================================
+// 파일 탭 (스냅샷/녹화 목록)
+// ============================================================
+
+QString MainWindow::snapshotsDir()
+{
+    return QDir::homePath() + "/.ziilab/snapshots";
+}
+
+QString MainWindow::recordingsDir()
+{
+    return QDir::homePath() + "/.ziilab/recordings";
+}
+
+QString MainWindow::currentFilesDir() const
+{
+    return m_currentFileType == 1 ? recordingsDir() : snapshotsDir();
+}
+
+void MainWindow::setupFilesTab(QWidget *parent)
+{
+    auto *layout = new QVBoxLayout(parent);
+    layout->setContentsMargins(12, 12, 12, 12);
+    layout->setSpacing(8);
+
+    // 타입 토글 (스냅샷/녹화)
+    auto *typeLayout = new QHBoxLayout();
+    typeLayout->setSpacing(4);
+
+    m_fileTypeGroup = new QButtonGroup(this);
+    m_fileTypeGroup->setExclusive(true);
+
+    QStringList typeLabels = {"스냅샷", "녹화"};
+    for (int i = 0; i < typeLabels.size(); ++i) {
+        auto *btn = new QPushButton(typeLabels[i], parent);
+        btn->setCheckable(true);
+        btn->setFixedHeight(28);
+        btn->setStyleSheet(
+            "QPushButton { color: #888; background-color: #222; border: 1px solid #444; "
+            "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
+            "QPushButton:checked { color: white; background-color: #335; border-color: #4a9eff; }"
+            "QPushButton:hover { background-color: #2a2a2a; }");
+        m_fileTypeGroup->addButton(btn, i);
+        typeLayout->addWidget(btn);
+        if (i == 0) btn->setChecked(true);
+    }
+    typeLayout->addStretch();
+
+    auto *refreshBtn = new QPushButton("↻", parent);
+    refreshBtn->setFixedSize(28, 28);
+    refreshBtn->setToolTip("새로고침");
+    refreshBtn->setStyleSheet(
+        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
+        "border-radius: 3px; font-size: 13px; }"
+        "QPushButton:hover { background-color: #2a2a2a; }");
+    connect(refreshBtn, &QPushButton::clicked, this, &MainWindow::refreshFilesList);
+    typeLayout->addWidget(refreshBtn);
+
+    layout->addLayout(typeLayout);
+
+    connect(m_fileTypeGroup, &QButtonGroup::idClicked, this, &MainWindow::setFileType);
+
+    // 파일 목록
+    m_filesList = new QListWidget(parent);
+    m_filesList->setStyleSheet(
+        "QListWidget { background-color: #1a1a1a; color: #ccc; border: 1px solid #333; "
+        "font-size: 11px; outline: none; }"
+        "QListWidget::item { padding: 6px 8px; border-bottom: 1px solid #222; }"
+        "QListWidget::item:selected { background-color: #2a3a5a; color: white; }"
+        "QListWidget::item:hover { background-color: #222; }");
+    m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_filesList, &QListWidget::itemDoubleClicked,
+            this, &MainWindow::openFilesListItem);
+    connect(m_filesList, &QListWidget::customContextMenuRequested,
+            this, &MainWindow::showFilesContextMenu);
+
+    layout->addWidget(m_filesList, 1);
+
+    refreshFilesList();
+}
+
+void MainWindow::setFileType(int type)
+{
+    m_currentFileType = type;
+    refreshFilesList();
+}
+
+void MainWindow::refreshFilesList()
+{
+    if (!m_filesList) return;
+    m_filesList->clear();
+
+    QDir dir(currentFilesDir());
+    if (!dir.exists()) return;
+
+    QStringList filters = m_currentFileType == 1
+        ? QStringList{"*.mp4", "*.mkv", "*.mov"}
+        : QStringList{"*.png", "*.jpg", "*.jpeg"};
+
+    auto entries = dir.entryInfoList(filters, QDir::Files, QDir::Time);
+    for (const auto &info : entries) {
+        QString when = info.lastModified().toString("yyyy-MM-dd HH:mm");
+        QString size;
+        qint64 bytes = info.size();
+        if (bytes < 1024)              size = QString("%1 B").arg(bytes);
+        else if (bytes < 1024 * 1024)  size = QString("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+        else if (bytes < 1024LL * 1024 * 1024)
+            size = QString("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
+        else
+            size = QString("%1 GB").arg(bytes / (1024.0 * 1024.0 * 1024.0), 0, 'f', 2);
+
+        auto *item = new QListWidgetItem(
+            QString("%1\n  %2  ·  %3").arg(info.fileName(), when, size));
+        item->setData(Qt::UserRole, info.absoluteFilePath());
+        item->setToolTip(info.absoluteFilePath());
+        m_filesList->addItem(item);
+    }
+}
+
+void MainWindow::openFilesListItem(QListWidgetItem *item)
+{
+    if (!item) return;
+    QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));
+}
+
+void MainWindow::showFilesContextMenu(const QPoint &pos)
+{
+    auto *item = m_filesList->itemAt(pos);
+    if (!item) return;
+
+    const QString path = item->data(Qt::UserRole).toString();
+
+    QMenu menu(this);
+    menu.setStyleSheet(Style::MENU);
+    auto *openAction = menu.addAction("열기");
+    auto *revealAction = menu.addAction(
+#if defined(__APPLE__)
+        "Finder에서 보기"
+#elif defined(_WIN32)
+        "탐색기에서 보기"
+#else
+        "파일 관리자에서 보기"
+#endif
+    );
+    menu.addSeparator();
+    auto *deleteAction = menu.addAction("삭제");
+
+    auto *selected = menu.exec(m_filesList->viewport()->mapToGlobal(pos));
+    if (!selected) return;
+
+    if (selected == openAction) {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    } else if (selected == revealAction) {
+#if defined(__APPLE__)
+        QProcess::startDetached("open", {"-R", path});
+#elif defined(_WIN32)
+        QProcess::startDetached("explorer", {"/select,", QDir::toNativeSeparators(path)});
+#else
+        QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+#endif
+    } else if (selected == deleteAction) {
+        auto ret = QMessageBox::question(this, "파일 삭제",
+            QString("'%1' 파일을 삭제하시겠습니까?").arg(QFileInfo(path).fileName()),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (ret == QMessageBox::Yes) {
+            if (QFile::remove(path)) {
+                appendLog(QString("파일 삭제: %1").arg(path), LogLevel::INFO);
+                refreshFilesList();
+            } else {
+                appendLog(QString("파일 삭제 실패: %1").arg(path), LogLevel::ERROR);
+            }
+        }
     }
 }

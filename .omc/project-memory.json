@@ -68,14 +68,14 @@
   "hotPaths": [
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 12,
-      "lastAccessed": 1776757951332,
+      "accessCount": 20,
+      "lastAccessed": 1776760095542,
       "type": "file"
     },
     {
       "path": "src/MainWindow.h",
-      "accessCount": 7,
-      "lastAccessed": 1776757907008,
+      "accessCount": 11,
+      "lastAccessed": 1776760014066,
       "type": "file"
     },
     {
@@ -86,9 +86,21 @@
     },
     {
       "path": "CMakeLists.txt",
-      "accessCount": 4,
-      "lastAccessed": 1776757616685,
+      "accessCount": 6,
+      "lastAccessed": 1776760642948,
       "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.cpp",
+      "accessCount": 5,
+      "lastAccessed": 1776760409677,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 3,
+      "lastAccessed": 1776759957921,
+      "type": "directory"
     },
     {
       "path": "resources/logo.png",
@@ -103,21 +115,21 @@
       "type": "file"
     },
     {
-      "path": "src/VlcWidget.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1776756454674,
-      "type": "file"
-    },
-    {
-      "path": "src",
-      "accessCount": 1,
-      "lastAccessed": 1776756459984,
-      "type": "directory"
-    },
-    {
       "path": "resources/resources.qrc",
       "accessCount": 1,
       "lastAccessed": 1776757581211,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 1,
+      "lastAccessed": 1776760580381,
+      "type": "directory"
+    },
+    {
+      "path": "resources/app.rc",
+      "accessCount": 1,
+      "lastAccessed": 1776760630070,
       "type": "file"
     }
   ],

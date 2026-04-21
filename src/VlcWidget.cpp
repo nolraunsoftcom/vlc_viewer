@@ -13,6 +13,9 @@
 #include <QRegularExpression>
 #include <QFutureWatcher>
 #include <QtConcurrent>
+#include <QScreen>
+#include <QPixmap>
+#include <QGuiApplication>
 #include <atomic>
 
 namespace {
@@ -146,7 +149,7 @@ libvlc_media_t *VlcWidget::openMedia(const QString &url, bool withRecording)
     libvlc_media_add_option(media, ":rtsp-tcp");
     if (withRecording && !m_recordingPath.isEmpty()) {
         QString sout = QString(":sout=#duplicate{dst=display,"
-                               "dst=std{access=file,mux=mp4,dst=\"%1\"}}")
+                               "dst=std{access=file,mux=mkv,dst=\"%1\"}}")
                         .arg(formatSoutPath(m_recordingPath));
         libvlc_media_add_option(media, sout.toUtf8().constData());
         libvlc_media_add_option(media, ":sout-keep");
@@ -222,7 +225,7 @@ void VlcWidget::detachEvents()
 
 QFuture<void> VlcWidget::cleanupPlayer()
 {
-    if (!m_player) return QtFuture::makeReadyFuture();
+    if (!m_player) return QtFuture::makeReadyVoidFuture();
 
     detachEvents();
 
@@ -276,6 +279,28 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
         self->setStatus(Status::Connected);
         self->m_placeholder->hide();
         self->m_videoSurface->show();
+
+        // fps 캐시: 연결 성공 시점 1회만 비디오 트랙에서 조회
+        self->m_cachedFps = 0.0;
+        if (self->m_player) {
+            libvlc_media_t *media = libvlc_media_player_get_media(self->m_player);
+            if (media) {
+                libvlc_media_track_t **tracks = nullptr;
+                unsigned n = libvlc_media_tracks_get(media, &tracks);
+                for (unsigned i = 0; i < n; ++i) {
+                    if (tracks[i]->i_type == libvlc_track_video && tracks[i]->video
+                        && tracks[i]->video->i_frame_rate_den > 0) {
+                        self->m_cachedFps =
+                            static_cast<double>(tracks[i]->video->i_frame_rate_num)
+                          / tracks[i]->video->i_frame_rate_den;
+                        break;
+                    }
+                }
+                if (tracks) libvlc_media_tracks_release(tracks, n);
+                libvlc_media_release(media);
+            }
+        }
+
         self->log(QString("[%1] Stream connected").arg(self->m_name), 1);
     }, Qt::QueuedConnection);
 }
@@ -433,6 +458,7 @@ VlcWidget::Stats VlcWidget::getStats() const
 {
     Stats s{};
     s.playing = isPlaying();
+    s.fps = m_cachedFps;  // onPlaying 시점에 1회 계산된 값
 
     if (!m_player || !s.playing) return s;
 
@@ -445,20 +471,6 @@ VlcWidget::Stats VlcWidget::getStats() const
             s.displayed_pictures = stats.i_displayed_pictures;
             s.lost_pictures = stats.i_lost_pictures;
         }
-
-        // FPS: 비디오 트랙에서 프레임레이트 조회
-        libvlc_media_track_t **tracks = nullptr;
-        unsigned trackCount = libvlc_media_tracks_get(media, &tracks);
-        for (unsigned i = 0; i < trackCount; ++i) {
-            if (tracks[i]->i_type == libvlc_track_video && tracks[i]->video
-                && tracks[i]->video->i_frame_rate_den > 0) {
-                s.fps = static_cast<double>(tracks[i]->video->i_frame_rate_num)
-                      / tracks[i]->video->i_frame_rate_den;
-                break;
-            }
-        }
-        if (tracks) libvlc_media_tracks_release(tracks, trackCount);
-
         libvlc_media_release(media);
     }
 
@@ -545,8 +557,22 @@ bool VlcWidget::takeSnapshot(const QString &filePath)
     if (width == 0) width = 640;
     if (height == 0) height = 480;
 
-    return libvlc_video_take_snapshot(m_player, 0,
-        filePath.toUtf8().constData(), width, height) == 0;
+    // 1차: libVLC 내장 snapshot
+    if (libvlc_video_take_snapshot(m_player, 0,
+            filePath.toUtf8().constData(), width, height) == 0) {
+        return true;
+    }
+
+    // 2차 폴백: sout 파이프라인이 활성이면 libVLC snapshot 이 실패할 수 있음 (3.x 제약).
+    // QScreen 으로 네이티브 비디오 서피스 영역을 OS-level 스크린 그랩.
+    QScreen *screen = m_videoSurface->screen();
+    if (!screen) screen = QGuiApplication::primaryScreen();
+    if (!screen) return false;
+
+    const WId wid = m_videoSurface->winId();
+    QPixmap pm = screen->grabWindow(wid, 0, 0, -1, -1);
+    if (pm.isNull()) return false;
+    return pm.save(filePath, "PNG");
 }
 
 void VlcWidget::attachToSurface()
@@ -594,11 +620,11 @@ QString VlcWidget::makeRecordingPath() const
 
     for (int i = 0; i < 100; ++i) {
         const QString suffix = (i == 0) ? QString() : QString("_%1").arg(i);
-        const QString path = QString("%1/%2_%3_%4%5.mp4")
+        const QString path = QString("%1/%2_%3_%4%5.mkv")
             .arg(dir, stem, ts).arg(seq).arg(suffix);
         if (!QFileInfo::exists(path)) return path;
     }
-    return QString("%1/%2_%3_%4.mp4").arg(dir, stem, ts).arg(seq);
+    return QString("%1/%2_%3_%4.mkv").arg(dir, stem, ts).arg(seq);
 }
 
 // ============================================================
@@ -801,37 +827,47 @@ void VlcWidget::updateRecordUi()
 {
     VlcWidget *t = recordingTarget();
     const RecState s = t ? t->m_recState : RecState::Idle;
+    const int sAsInt = static_cast<int>(s);
+    const bool stateChanged = (sAsInt != m_lastDisplayedRec);
 
     switch (s) {
         case RecState::Idle:
-            m_recBadge->hide();
-            m_recordBtn->setText("●");
-            m_recordBtn->setToolTip("녹화 시작");
-            m_recordBtn->setStyleSheet(Style::TOOL_BUTTON);
+            if (stateChanged) {
+                m_recBadge->hide();
+                m_recordBtn->setText("●");
+                m_recordBtn->setToolTip("녹화 시작");
+                m_recordBtn->setStyleSheet(Style::TOOL_BUTTON);
+            }
             m_recordBtn->setEnabled(t && t->isPlaying());
             break;
         case RecState::Starting:
-            m_recBadge->setStyleSheet(Style::REC_BADGE_STARTING);
-            m_recBadge->setText("● REC…");
-            m_recBadge->show();
-            m_recordBtn->setText("●");
-            m_recordBtn->setToolTip("녹화 시작 중…");
-            m_recordBtn->setStyleSheet(Style::TOOL_BUTTON);
-            m_recordBtn->setEnabled(false);
+            if (stateChanged) {
+                m_recBadge->setStyleSheet(Style::REC_BADGE_STARTING);
+                m_recBadge->setText("● REC…");
+                m_recBadge->show();
+                m_recordBtn->setText("●");
+                m_recordBtn->setToolTip("녹화 시작 중…");
+                m_recordBtn->setStyleSheet(Style::TOOL_BUTTON);
+                m_recordBtn->setEnabled(false);
+            }
             break;
         case RecState::Active: {
+            if (stateChanged) {
+                m_recBadge->setStyleSheet(Style::REC_BADGE_ACTIVE);
+                m_recBadge->show();
+                m_recordBtn->setText("■");
+                m_recordBtn->setToolTip("녹화 중지");
+                m_recordBtn->setStyleSheet(Style::TOOL_BUTTON_REC);
+                m_recordBtn->setEnabled(true);
+            }
+            // 경과시간은 매 틱 갱신 (텍스트만, 스타일 재적용 없음)
             int elapsed = t->m_recordingStartTime.secsTo(QDateTime::currentDateTime());
             if (elapsed < 0) elapsed = 0;
-            m_recBadge->setStyleSheet(Style::REC_BADGE_ACTIVE);
             m_recBadge->setText(QString("● REC %1").arg(formatElapsed(elapsed)));
-            m_recBadge->show();
-            m_recordBtn->setText("■");
-            m_recordBtn->setToolTip("녹화 중지");
-            m_recordBtn->setStyleSheet(Style::TOOL_BUTTON_REC);
-            m_recordBtn->setEnabled(true);
             break;
         }
     }
 
+    m_lastDisplayedRec = sAsInt;
     m_snapshotBtn->setEnabled(isPlaying());
 }

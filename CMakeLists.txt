@@ -48,6 +48,7 @@ message(STATUS "Using libVLC library: ${VLC_LIBRARY}")
 # ============================================================
 set(APP_ICON_MACOS "${CMAKE_SOURCE_DIR}/resources/logo.icns")
 set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+set(APP_ICON_WINDOWS "${CMAKE_SOURCE_DIR}/resources/app.rc")
 
 if(APPLE)
     add_executable(viewer MACOSX_BUNDLE
@@ -58,6 +59,16 @@ if(APPLE)
         src/StatusBar.cpp
         resources/resources.qrc
         ${APP_ICON_MACOS}
+    )
+elseif(WIN32)
+    add_executable(viewer WIN32
+        src/main.cpp
+        src/MainWindow.cpp
+        src/VlcWidget.cpp
+        src/ConnectionDialog.cpp
+        src/StatusBar.cpp
+        resources/resources.qrc
+        ${APP_ICON_WINDOWS}
     )
 else()
     add_executable(viewer

@@ -9,6 +9,7 @@
 #include <QTabWidget>
 #include <QTextEdit>
 #include <QButtonGroup>
+#include <QListWidget>
 #include <vlc/vlc.h>
 #include "ConnectionDialog.h"
 
@@ -31,6 +32,8 @@ private slots:
     void addChannel();
     void removeSelectedChannel();
     void setGridColumns(int cols);
+    void setFileType(int type);
+    void refreshFilesList();
 
 private:
     libvlc_instance_t *m_vlcInstance = nullptr;
@@ -46,6 +49,11 @@ private:
     QTabWidget *m_rightTabs = nullptr;
     QTextEdit *m_logView = nullptr;
     QButtonGroup *m_colBtnGroup = nullptr;
+
+    // 파일 탭 (스냅샷/녹화 목록)
+    QListWidget *m_filesList = nullptr;
+    QButtonGroup *m_fileTypeGroup = nullptr;
+    int m_currentFileType = 0; // 0 = snapshots, 1 = recordings
 
     // 영상 영역
     QTabWidget *m_videoTabs = nullptr;
@@ -64,7 +72,13 @@ private:
     bool eventFilter(QObject *obj, QEvent *event) override;
     void setupSidebar(QWidget *parent);
     void setupRightPanel(QWidget *parent);
+    void setupFilesTab(QWidget *parent);
     void setupVideoArea(QWidget *parent);
+    static QString snapshotsDir();
+    static QString recordingsDir();
+    QString currentFilesDir() const;
+    void showFilesContextMenu(const QPoint &pos);
+    void openFilesListItem(QListWidgetItem *item);
     void openFullscreenTab(VlcWidget *viewer);
     void closeVideoTab(int index);
 

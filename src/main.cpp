@@ -28,7 +28,16 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
         msgStr.contains("Could not convert timestamp") ||
         msgStr.contains("picture is too late") ||
         msgStr.contains("late frames, dropping frame") ||
-        msgStr.contains("Waiting for VPS/SPS/PPS")) {
+        msgStr.contains("Waiting for VPS/SPS/PPS") ||
+        // MP4 muxer 의 live RTSP 녹화 중 양성 경고들
+        msgStr.contains("i_length") ||
+        msgStr.contains("pts == 0") ||
+        msgStr.contains("Track id ") ||
+        msgStr.contains("Missing or unsupported sample") ||
+        msgStr.contains("late buffer for mux input") ||
+        msgStr.contains("buffer deadlock prevented") ||
+        msgStr.contains("cannot peek") ||
+        msgStr.contains("sout_AccessOutWrite")) {
         return;
     }
 

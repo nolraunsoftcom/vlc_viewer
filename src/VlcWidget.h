@@ -102,6 +102,12 @@ private:
     QDateTime m_recordingStartTime;
     int m_recWatchdogAttempts = 0;
 
+    // UI 성능: stylesheet 반복 재적용 방지용 캐시 (-1 = 아직 미적용)
+    int m_lastDisplayedRec = -1;
+
+    // 비디오 트랙 fps 캐시 — 연결 세션 동안 고정값이므로 반복 조회 회피
+    double m_cachedFps = 0.0;
+
     std::function<void(const QString &, int)> m_logCallback;
     void log(const QString &msg, int level = 1);
     void attachToSurface();
