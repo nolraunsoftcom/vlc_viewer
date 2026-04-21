@@ -1,4 +1,5 @@
 #include "VlcWidget.h"
+#include "Style.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QSizePolicy>
@@ -228,7 +229,7 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
         self->setStatus(Status::Disconnected);
         self->showStatus("연결 오류");
         self->log(QString("[%1] Connection Error").arg(self->m_name), 3);
-        if (self->m_autoReconnect) {
+        if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
             self->m_reconnectTimer->start();
         }
     }, Qt::QueuedConnection);
@@ -333,23 +334,38 @@ VlcWidget::Stats VlcWidget::getStats() const
 
     if (!m_player || !s.playing) return s;
 
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    s.fps = static_cast<double>(libvlc_media_player_get_fps(m_player));
-#pragma clang diagnostic pop
-
     libvlc_media_t *media = libvlc_media_player_get_media(m_player);
     if (media) {
         libvlc_media_stats_t stats{};
         if (libvlc_media_get_stats(media, &stats)) {
-            s.bitrate_kbps = static_cast<double>(stats.f_demux_bitrate) * 8.0 * 1024.0;
+            // f_demux_bitrate 단위: bytes/µs → × 8000 = kbit/s
+            s.bitrate_kbps = static_cast<double>(stats.f_demux_bitrate) * 8000.0;
             s.displayed_pictures = stats.i_displayed_pictures;
             s.lost_pictures = stats.i_lost_pictures;
         }
+
+        // FPS: 비디오 트랙에서 프레임레이트 조회 (get_fps 대체)
+        libvlc_media_track_t **tracks = nullptr;
+        unsigned trackCount = libvlc_media_tracks_get(media, &tracks);
+        for (unsigned i = 0; i < trackCount; ++i) {
+            if (tracks[i]->i_type == libvlc_track_video && tracks[i]->video
+                && tracks[i]->video->i_frame_rate_den > 0) {
+                s.fps = static_cast<double>(tracks[i]->video->i_frame_rate_num)
+                      / tracks[i]->video->i_frame_rate_den;
+                break;
+            }
+        }
+        if (tracks) libvlc_media_tracks_release(tracks, trackCount);
+
         libvlc_media_release(media);
     }
 
     return s;
+}
+
+void VlcWidget::reattachVideoOutput()
+{
+    attachToSurface();
 }
 
 void VlcWidget::mouseDoubleClickEvent(QMouseEvent *event)
@@ -370,10 +386,7 @@ void VlcWidget::mousePressEvent(QMouseEvent *event)
 void VlcWidget::showContextMenu(const QPoint &globalPos)
 {
     QMenu menu(this);
-    menu.setStyleSheet(
-        "QMenu { background-color: #2a2a2a; color: #ccc; border: 1px solid #444; font-size: 12px; }"
-        "QMenu::item { padding: 6px 20px; }"
-        "QMenu::item:selected { background-color: #335; }");
+    menu.setStyleSheet(Style::MENU);
 
     auto *fullscreenAction = menu.addAction("전체화면으로 열기");
     auto *snapshotAction = menu.addAction("스냅샷 저장");

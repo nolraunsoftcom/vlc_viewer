@@ -154,9 +154,6 @@ ConnectionInfo ConnectionDialog::result() const
     return ConnectionInfo{
         m_channelName->text(),
         m_rtspUrl->text(),
-        QString(),
-        0,
-        QString(),
         m_autoReconnect->isChecked()
     };
 }

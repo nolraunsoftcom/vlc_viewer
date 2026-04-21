@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1775833898822,
+  "lastScanned": 1776756437911,
   "projectRoot": "/Users/ieonsang/nolsoft/ziilab/viewer",
   "techStack": {
     "languages": [
@@ -43,91 +43,52 @@
     "build": {
       "path": "build",
       "purpose": "Build output",
-      "fileCount": 4,
-      "lastAccessed": 1775833898812,
+      "fileCount": 3,
+      "lastAccessed": 1776756437904,
       "keyFiles": [
         "CMakeCache.txt",
         "Makefile",
-        "cmake_install.cmake",
-        "viewer"
+        "cmake_install.cmake"
       ]
     },
     "src": {
       "path": "src",
       "purpose": "Source code",
-      "fileCount": 1,
-      "lastAccessed": 1775833898813,
+      "fileCount": 10,
+      "lastAccessed": 1776756437904,
       "keyFiles": [
-        "main.cpp"
+        "ConnectionDialog.cpp",
+        "ConnectionDialog.h",
+        "MainWindow.cpp",
+        "MainWindow.h",
+        "StatusBar.cpp"
       ]
     }
   },
   "hotPaths": [
     {
-      "path": "src/MainWindow.cpp",
-      "accessCount": 125,
-      "lastAccessed": 1775981327678,
-      "type": "file"
-    },
-    {
-      "path": "src/VlcWidget.cpp",
-      "accessCount": 86,
-      "lastAccessed": 1775981314523,
+      "path": "src/main.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1776756503519,
       "type": "file"
     },
     {
       "path": "src/VlcWidget.h",
-      "accessCount": 41,
-      "lastAccessed": 1775980104314,
-      "type": "file"
-    },
-    {
-      "path": "src/main.cpp",
-      "accessCount": 28,
-      "lastAccessed": 1775986341427,
-      "type": "file"
-    },
-    {
-      "path": "src/MainWindow.h",
-      "accessCount": 24,
-      "lastAccessed": 1775976556335,
-      "type": "file"
-    },
-    {
-      "path": "src/StatusBar.cpp",
-      "accessCount": 9,
-      "lastAccessed": 1775976165571,
-      "type": "file"
-    },
-    {
-      "path": "src/ConnectionDialog.cpp",
-      "accessCount": 7,
-      "lastAccessed": 1775976164707,
-      "type": "file"
-    },
-    {
-      "path": "CMakeLists.txt",
-      "accessCount": 7,
-      "lastAccessed": 1775981824034,
-      "type": "file"
-    },
-    {
-      "path": "src/ConnectionDialog.h",
-      "accessCount": 2,
-      "lastAccessed": 1775976164406,
-      "type": "file"
-    },
-    {
-      "path": "src/StatusBar.h",
-      "accessCount": 2,
-      "lastAccessed": 1775976165255,
-      "type": "file"
-    },
-    {
-      "path": "README.md",
       "accessCount": 1,
-      "lastAccessed": 1775981495859,
+      "lastAccessed": 1776756450202,
       "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.cpp",
+      "accessCount": 1,
+      "lastAccessed": 1776756454674,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 1,
+      "lastAccessed": 1776756459984,
+      "type": "directory"
     }
   ],
   "userDirectives": []

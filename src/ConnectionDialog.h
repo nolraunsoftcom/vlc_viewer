@@ -2,17 +2,12 @@
 
 #include <QDialog>
 #include <QLineEdit>
-#include <QSpinBox>
 #include <QCheckBox>
 #include <optional>
-#include <cstdint>
 
 struct ConnectionInfo {
     QString channelName;
     QString rtspUrl;
-    QString serverAddress;
-    uint16_t serverPort;
-    QString password;
     bool autoReconnect;
 };
 
@@ -28,9 +23,6 @@ public:
 private:
     QLineEdit *m_channelName = nullptr;
     QLineEdit *m_rtspUrl = nullptr;
-    QLineEdit *m_serverAddress = nullptr;
-    QSpinBox  *m_serverPort = nullptr;
-    QLineEdit *m_password = nullptr;
     QCheckBox *m_autoReconnect = nullptr;
 
     ConnectionInfo result() const;

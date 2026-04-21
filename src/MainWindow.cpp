@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "VlcWidget.h"
 #include "StatusBar.h"
+#include "Style.h"
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QPushButton>
@@ -104,11 +105,11 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
         if (idx >= 0) {
             QString chName = v->name();
 
-            // orphan fullscreen 탭 닫기
+            // 전체화면 탭에서 동일 뷰어가 호스팅 중이면 분리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                auto *tabWidget = m_videoTabs->widget(i);
-                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(v)) {
-                    closeVideoTab(i);
+                if (m_videoTabs->widget(i) == v) {
+                    m_videoTabs->removeTab(i);
+                    break;
                 }
             }
 
@@ -246,10 +247,7 @@ void MainWindow::setupSidebar(QWidget *parent)
         m_channelTable->selectRow(row);
 
         QMenu menu(this);
-        menu.setStyleSheet(
-            "QMenu { background-color: #2a2a2a; color: #ccc; border: 1px solid #444; font-size: 12px; }"
-            "QMenu::item { padding: 6px 20px; }"
-            "QMenu::item:selected { background-color: #335; }");
+        menu.setStyleSheet(Style::MENU);
         auto *fullscreenAction = menu.addAction("전체화면으로 열기");
         menu.addSeparator();
         auto *removeAction = menu.addAction("채널 삭제");
@@ -345,7 +343,6 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::RightSide, nullptr);
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::LeftSide, nullptr);
 
-    scrollArea->installEventFilter(this);
     m_gridWidget->installEventFilter(this);
 
     layout->addWidget(m_videoTabs, 1);
@@ -476,24 +473,23 @@ void MainWindow::setGridColumns(int cols)
 
 void MainWindow::openFullscreenTab(VlcWidget *viewer)
 {
-    // 이미 열려있는지 소스 뷰어 포인터로 확인
+    // 이미 전체화면 탭에 있으면 해당 탭으로 전환
     for (int i = 1; i < m_videoTabs->count(); ++i) {
-        auto *tabWidget = m_videoTabs->widget(i);
-        if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
+        if (m_videoTabs->widget(i) == viewer) {
             m_videoTabs->setCurrentIndex(i);
             return;
         }
     }
 
-    auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
-    fullViewer->setFullscreenMode(true);
-    fullViewer->setProperty("sourceViewer", QVariant::fromValue(reinterpret_cast<quintptr>(viewer)));
-    fullViewer->setLogCallback([this](const QString &msg, int level) {
-        appendLog(msg, static_cast<LogLevel>(level));
-    });
-    fullViewer->play(viewer->url(), viewer->name());
+    // 기존 스트림을 그대로 탭으로 이동 (리페어런트)
+    viewer->setFullscreenMode(true);
+    // 그리드 셀 크기 고정을 해제해 탭에서 풀사이즈 렌더 허용
+    viewer->setMinimumHeight(0);
+    viewer->setMaximumHeight(QWIDGETSIZE_MAX);
 
-    int tabIndex = m_videoTabs->addTab(fullViewer, "");
+    int tabIndex = m_videoTabs->addTab(viewer, "");
+    // 리페어런트로 native handle이 갱신될 수 있으므로 VLC 출력 재연결
+    viewer->reattachVideoOutput();
 
     auto *tabLabel = new QLabel(viewer->name());
     tabLabel->setStyleSheet("color: #ccc; font-size: 11px; padding-left: 8px;");
@@ -505,9 +501,9 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         "QPushButton { color: #666; background: transparent; border: none; "
         "font-size: 12px; padding: 0; margin: 0; }"
         "QPushButton:hover { color: #ccc; background-color: #444; border-radius: 3px; }");
-    connect(closeBtn, &QPushButton::clicked, this, [this, fullViewer]() {
+    connect(closeBtn, &QPushButton::clicked, this, [this, viewer]() {
         for (int i = 1; i < m_videoTabs->count(); ++i) {
-            if (m_videoTabs->widget(i) == fullViewer) {
+            if (m_videoTabs->widget(i) == viewer) {
                 closeVideoTab(i);
                 return;
             }
@@ -516,6 +512,9 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     m_videoTabs->tabBar()->setTabButton(tabIndex, QTabBar::RightSide, closeBtn);
     m_videoTabs->setCurrentIndex(tabIndex);
 
+    // 그리드에 빈 자리가 생기므로 재배치
+    rebuildGrid();
+
     appendLog(QString("Fullscreen: %1").arg(viewer->name()), LogLevel::DEBUG);
 }
 
@@ -523,16 +522,27 @@ void MainWindow::closeVideoTab(int index)
 {
     if (index == 0) return;
 
-    auto *widget = qobject_cast<VlcWidget *>(m_videoTabs->widget(index));
-
+    auto *widget = m_videoTabs->widget(index);
     m_videoTabs->removeTab(index);
 
-    if (widget) {
-        widget->stop();
-        widget->deleteLater();
+    auto *viewer = qobject_cast<VlcWidget *>(widget);
+    if (!viewer) {
+        if (widget) widget->deleteLater();
+        return;
     }
 
-    appendLog("Returned to grid", LogLevel::DEBUG);
+    // 관리 중인 뷰어면 그리드로 복귀, 아니면 파기
+    if (m_viewers.contains(viewer)) {
+        viewer->setFullscreenMode(false);
+        viewer->setParent(m_gridWidget);
+        rebuildGrid();
+        // 다시 리페어런트 되었으므로 VLC 출력 재연결
+        viewer->reattachVideoOutput();
+        appendLog("Returned to grid", LogLevel::DEBUG);
+    } else {
+        viewer->stop();
+        viewer->deleteLater();
+    }
 }
 
 // ============================================================
@@ -625,11 +635,11 @@ void MainWindow::removeSelectedChannel()
             auto *viewer = m_viewers[row];
             QString chName = viewer->name();
 
-            // orphan fullscreen 탭 닫기
+            // 전체화면 탭 호스팅 중이면 먼저 분리
             for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                auto *tabWidget = m_videoTabs->widget(i);
-                if (tabWidget && tabWidget->property("sourceViewer").value<quintptr>() == reinterpret_cast<quintptr>(viewer)) {
-                    closeVideoTab(i);
+                if (m_videoTabs->widget(i) == viewer) {
+                    m_videoTabs->removeTab(i);
+                    break;
                 }
             }
 
@@ -654,15 +664,23 @@ void MainWindow::rebuildGrid()
     qDeleteAll(m_emptyLabels);
     m_emptyLabels.clear();
 
+    // 전체화면으로 탭에 이동한 뷰어는 건드리지 않음 (부모가 m_gridWidget이 아님)
     for (auto *viewer : m_viewers) {
-        m_grid->removeWidget(viewer);
-        viewer->hide();
+        if (viewer->parentWidget() == m_gridWidget) {
+            m_grid->removeWidget(viewer);
+            viewer->hide();
+        }
     }
 
     delete m_grid;
     m_grid = new QGridLayout(m_gridWidget);
     m_grid->setSpacing(1);
     m_grid->setContentsMargins(0, 0, 0, 0);
+
+    QVector<VlcWidget *> visible;
+    for (auto *v : m_viewers) {
+        if (!v->isFullscreenMode()) visible.append(v);
+    }
 
     int count = m_viewers.size();
     if (count == 0) return;
@@ -673,12 +691,13 @@ void MainWindow::rebuildGrid()
 
     for (int c = 0; c < cols; ++c) m_grid->setColumnStretch(c, 1);
 
-    for (int i = 0; i < count; ++i) {
-        m_grid->addWidget(m_viewers[i], i / cols, i % cols);
-        m_viewers[i]->show();
+    int visibleCount = visible.size();
+    for (int i = 0; i < visibleCount; ++i) {
+        m_grid->addWidget(visible[i], i / cols, i % cols);
+        visible[i]->show();
     }
 
-    for (int i = count; i < totalCells; ++i) {
+    for (int i = visibleCount; i < totalCells; ++i) {
         auto *label = new QLabel("No Stream", m_gridWidget);
         label->setAlignment(Qt::AlignCenter);
         label->setStyleSheet("color: #444; font-size: 13px; background-color: #111;");
@@ -709,6 +728,8 @@ void MainWindow::updateGridCellSizes()
     int cellHeight = cellWidth * 3 / 4 + infoBarHeight;
 
     for (auto *viewer : m_viewers) {
+        // 전체화면 상태인 뷰어는 탭에서 풀사이즈로 써야 하므로 고정 크기 배제
+        if (viewer->isFullscreenMode()) continue;
         viewer->setFixedHeight(cellHeight);
     }
     for (auto *label : m_emptyLabels) {

@@ -23,7 +23,9 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
     if (msgStr.contains("deadlock prevented") ||
         msgStr.contains("Timestamp conversion") ||
         msgStr.contains("Could not convert timestamp") ||
-        msgStr.contains("picture is too late")) {
+        msgStr.contains("picture is too late") ||
+        msgStr.contains("late frames, dropping frame") ||
+        msgStr.contains("Waiting for VPS/SPS/PPS")) {
         return;
     }
 
@@ -53,20 +55,18 @@ int main(int argc, char *argv[])
     setenv("VLC_PLUGIN_PATH", pluginPath.toUtf8().constData(), 1);
 #endif
 
-    // VLC 인스턴스 생성 (저지연 설정)
+    // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
     const char *vlcArgs[] = {
         "--reset-plugins-cache",
-        "--network-caching=300",
-        "--clock-jitter=5000",
+        "--network-caching=500",
+        "--live-caching=500",
+        "--rtsp-caching=500",
+        "--clock-jitter=0",
         "--clock-synchro=0",
-        "--avcodec-skiploopfilter=4",
         "--avcodec-hurry-up",
         "--avcodec-fast",
-        "--drop-late-frames",
-        "--skip-frames",
         "--no-audio",
         "--no-videotoolbox",
-        "--no-ts-trust",
     };
     int vlcArgCount = sizeof(vlcArgs) / sizeof(vlcArgs[0]);
     libvlc_instance_t *vlcInstance = libvlc_new(vlcArgCount, vlcArgs);
