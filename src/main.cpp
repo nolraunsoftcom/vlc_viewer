@@ -2,6 +2,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
+#include <QMessageBox>
 #include <vlc/vlc.h>
 #include <cstdlib>
 #include <QThreadPool>
@@ -43,9 +44,10 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     app.setWindowIcon(QIcon(":/logo.png"));
 
-#if defined(__APPLE__)
     QString pluginPath;
     const QDir appDir(QApplication::applicationDirPath());
+
+#if defined(__APPLE__)
     const QFileInfo bundledPlugins(appDir.filePath("../Frameworks/plugins"));
 
     if (bundledPlugins.exists() && bundledPlugins.isDir()) {
@@ -53,9 +55,16 @@ int main(int argc, char *argv[])
     } else {
         pluginPath = QStringLiteral("/Applications/VLC.app/Contents/MacOS/plugins");
     }
-
-    setenv("VLC_PLUGIN_PATH", pluginPath.toUtf8().constData(), 1);
+#elif defined(_WIN32)
+    const QFileInfo bundledPlugins(appDir.filePath("plugins"));
+    if (bundledPlugins.exists() && bundledPlugins.isDir()) {
+        pluginPath = bundledPlugins.canonicalFilePath();
+    }
 #endif
+
+    if (!pluginPath.isEmpty()) {
+        qputenv("VLC_PLUGIN_PATH", QDir::toNativeSeparators(pluginPath).toUtf8());
+    }
 
     // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
     const char *vlcArgs[] = {
@@ -72,6 +81,16 @@ int main(int argc, char *argv[])
     int vlcArgCount = sizeof(vlcArgs) / sizeof(vlcArgs[0]);
     libvlc_instance_t *vlcInstance = libvlc_new(vlcArgCount, vlcArgs);
     if (!vlcInstance) {
+        QString detail = pluginPath.isEmpty()
+            ? QStringLiteral("VLC plugin path not found next to the executable.")
+            : QString("VLC plugin path: %1").arg(QDir::toNativeSeparators(pluginPath));
+        QMessageBox::critical(
+            nullptr,
+            "ZiiLab Viewer",
+            QString("libVLC initialization failed.\n\n%1\n\n"
+                    "On Windows, the app folder must include the VLC runtime DLLs "
+                    "and a plugins directory.")
+                .arg(detail));
         return 1;
     }
 

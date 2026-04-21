@@ -91,6 +91,12 @@
       "type": "file"
     },
     {
+      "path": "resources/logo.png",
+      "accessCount": 2,
+      "lastAccessed": 1776758210189,
+      "type": "file"
+    },
+    {
       "path": "src/VlcWidget.h",
       "accessCount": 1,
       "lastAccessed": 1776756450202,
