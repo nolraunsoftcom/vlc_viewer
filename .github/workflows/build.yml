@@ -13,7 +13,7 @@ jobs:
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
@@ -51,7 +51,7 @@ jobs:
           cp -R viewer.app dist/viewer.app
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ZiiLabViewer-macOS
           path: build/dist/
@@ -62,7 +62,7 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
@@ -70,11 +70,6 @@ jobs:
           version: '6.8.0'
           arch: win64_msvc2022_64
           modules: qtmultimedia
-
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
 
       - name: Download VLC runtime and headers
         shell: pwsh
@@ -163,6 +158,14 @@ jobs:
       - name: Build
         shell: cmd
         run: |
+          set "VSINSTALL="
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo Visual Studio with C++ tools was not found.
+            exit /b 1
+          )
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64
+          if errorlevel 1 exit /b 1
           mkdir build && cd build
           cmake .. -G "Ninja" ^
             -DCMAKE_BUILD_TYPE=Release ^
@@ -187,7 +190,7 @@ jobs:
           if exist C:\vlc-sdk\locale xcopy C:\vlc-sdk\locale dist\locale\ /E /I /Y
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ZiiLabViewer-Windows
           path: build/dist/
