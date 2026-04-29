@@ -86,7 +86,7 @@ target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent ${VLC_LIBRARY}
 
 if(APPLE)
     set_target_properties(viewer PROPERTIES
-        MACOSX_BUNDLE_BUNDLE_NAME "ZiiLabViewer"
+        MACOSX_BUNDLE_BUNDLE_NAME "영상관리시스템"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.nolsoft.ziilab.viewer"
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}

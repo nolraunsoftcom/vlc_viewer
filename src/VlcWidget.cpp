@@ -203,6 +203,15 @@ void VlcWidget::play(const QString &url, const QString &name)
     updateRecordUi();
 }
 
+void VlcWidget::setChannelInfo(const QString &name, const QString &url)
+{
+    m_name = name;
+    m_url = url;
+    m_nameLabel->setText(name);
+    m_infoLabel->setText(url);
+    updateRecordUi();
+}
+
 void VlcWidget::setupEvents()
 {
     if (!m_player) return;
@@ -498,6 +507,7 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
     menu.setStyleSheet(Style::MENU);
 
     auto *fullscreenAction = menu.addAction("전체화면으로 열기");
+    auto *editAction = menu.addAction("채널 수정");
     auto *snapshotAction = menu.addAction("스냅샷 저장");
     VlcWidget *t = recordingTarget();
     const bool rec = t && t->m_recState == RecState::Active;
@@ -509,6 +519,7 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
     auto *removeAction = menu.addAction("채널 삭제");
 
     fullscreenAction->setEnabled(!m_url.isEmpty() && !m_isFullscreen);
+    editAction->setEnabled(!m_url.isEmpty() && (!m_isFullscreen || m_sourceViewer));
     snapshotAction->setEnabled(isPlaying());
     recordAction->setEnabled(t && !starting && (rec || t->isPlaying()));
     reconnectAction->setEnabled(!m_url.isEmpty() && m_status != Status::Connected && m_status != Status::Connecting);
@@ -519,6 +530,8 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
 
     if (selected == fullscreenAction) {
         emit requestFullscreen(this);
+    } else if (selected == editAction) {
+        emit requestEdit(m_isFullscreen && m_sourceViewer ? m_sourceViewer.data() : this);
     } else if (selected == reconnectAction) {
         reconnect();
     } else if (selected == snapshotAction) {

@@ -31,6 +31,7 @@ public:
     };
 
     void play(const QString &url, const QString &name = QString());
+    void setChannelInfo(const QString &name, const QString &url);
     void reconnect();
     void setLogCallback(std::function<void(const QString &, int)> callback) { m_logCallback = callback; }
     void setAutoReconnect(bool enabled) { m_autoReconnect = enabled; }
@@ -64,6 +65,7 @@ public slots:
 signals:
     void doubleClicked(VlcWidget *widget);
     void requestFullscreen(VlcWidget *widget);
+    void requestEdit(VlcWidget *widget);
     void requestRemove(VlcWidget *widget);
     void snapshotTaken(const QString &filePath);
     void statusChanged(VlcWidget *widget, VlcWidget::Status status);

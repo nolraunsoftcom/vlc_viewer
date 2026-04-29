@@ -102,7 +102,24 @@ QPushButton:default {
 ConnectionDialog::ConnectionDialog(int channelNumber, QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("채널 추가");
+    setupUi(ConnectionInfo{
+        QString("Camera %1").arg(channelNumber),
+        "rtsp://10.1.100.30:8904/live",
+        true
+    }, "채널 추가");
+}
+
+ConnectionDialog::ConnectionDialog(const ConnectionInfo &initialInfo,
+                                   const QString &windowTitle,
+                                   QWidget *parent)
+    : QDialog(parent)
+{
+    setupUi(initialInfo, windowTitle);
+}
+
+void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString &windowTitle)
+{
+    setWindowTitle(windowTitle);
     setModal(true);
     setMinimumWidth(400);
     setStyleSheet(DIALOG_STYLE);
@@ -118,10 +135,10 @@ ConnectionDialog::ConnectionDialog(int channelNumber, QWidget *parent)
     channelForm->setSpacing(8);
     channelForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
-    m_channelName = new QLineEdit(QString("Camera %1").arg(channelNumber), channelGroup);
+    m_channelName = new QLineEdit(initialInfo.channelName, channelGroup);
     channelForm->addRow("채널 이름:", m_channelName);
 
-    m_rtspUrl = new QLineEdit("rtsp://10.1.100.30:8904/live", channelGroup);
+    m_rtspUrl = new QLineEdit(initialInfo.rtspUrl, channelGroup);
     channelForm->addRow("RTSP URL:", m_rtspUrl);
 
     mainLayout->addWidget(channelGroup);
@@ -132,7 +149,7 @@ ConnectionDialog::ConnectionDialog(int channelNumber, QWidget *parent)
     optionsLayout->setContentsMargins(10, 16, 10, 10);
 
     m_autoReconnect = new QCheckBox("자동 재연결", optionsGroup);
-    m_autoReconnect->setChecked(true);
+    m_autoReconnect->setChecked(initialInfo.autoReconnect);
     optionsLayout->addWidget(m_autoReconnect);
 
     mainLayout->addWidget(optionsGroup);
@@ -161,6 +178,20 @@ ConnectionInfo ConnectionDialog::result() const
 std::optional<ConnectionInfo> ConnectionDialog::getConnectionInfo(QWidget *parent, int channelNumber)
 {
     ConnectionDialog dlg(channelNumber, parent);
+    if (dlg.exec() == QDialog::Accepted) {
+        ConnectionInfo info = dlg.result();
+        if (!info.channelName.isEmpty() && !info.rtspUrl.isEmpty()) {
+            return info;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<ConnectionInfo> ConnectionDialog::getConnectionInfo(QWidget *parent,
+                                                                  const ConnectionInfo &initialInfo,
+                                                                  const QString &windowTitle)
+{
+    ConnectionDialog dlg(initialInfo, windowTitle, parent);
     if (dlg.exec() == QDialog::Accepted) {
         ConnectionInfo info = dlg.result();
         if (!info.channelName.isEmpty() && !info.rtspUrl.isEmpty()) {

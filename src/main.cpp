@@ -52,6 +52,8 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
+    app.setApplicationName(QStringLiteral("영상관리시스템"));
+    app.setApplicationDisplayName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(":/logo.png"));
 
     QString pluginPath;
@@ -100,7 +102,7 @@ int main(int argc, char *argv[])
             : QString("VLC plugin path: %1").arg(QDir::toNativeSeparators(pluginPath));
         QMessageBox::critical(
             nullptr,
-            "ZiiLab Viewer",
+            QStringLiteral("영상관리시스템"),
             QString("libVLC initialization failed.\n\n%1\n\n"
                     "On Windows, the app folder must include the VLC runtime DLLs "
                     "and a plugins directory.")

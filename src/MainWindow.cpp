@@ -27,16 +27,39 @@
 #include <QImageReader>
 #include <QPainter>
 #include <QStyle>
+#include <QSizePolicy>
+#include <QApplication>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QMouseEvent>
+#include <QSet>
+#include <QFrame>
+#include <QItemSelection>
+#include <QItemSelectionModel>
 
 static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
 static const int MAX_LOG_LINES = 1000;
+static const int GRID_SPACING = 1;
+static const int VIEWER_INFO_BAR_HEIGHT = 36;
+static const int LEFT_PANEL_WIDTH = 200;
+static const int RIGHT_PANEL_WIDTH = 280;
+static const int PANEL_TOGGLE_WIDTH = 18;
+static const char *CHANNEL_DRAG_MIME = "application/x-ziilab-channel-row";
+static const char *VIEWER_DRAG_MIME = "application/x-ziilab-viewer-ptr";
+static const QString GRID_CELL_STYLE =
+    "QFrame#gridCell { background-color: #111; border: none; }";
+static const QString GRID_CELL_HIGHLIGHT_STYLE =
+    "QFrame#gridCell { background-color: #4a9eff; border: none; }";
 
 MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     : QMainWindow(parent)
     , m_vlcInstance(vlcInstance)
 {
-    setWindowTitle("ZiiLab Viewer");
+    setWindowTitle(QStringLiteral("영상관리시스템"));
     resize(1400, 800);
 
     auto *central = new QWidget(this);
@@ -50,11 +73,17 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    auto *sidebar = new QWidget(panelRow);
-    sidebar->setFixedWidth(200);
-    sidebar->setStyleSheet("background-color: #1a1a1a;");
-    setupSidebar(sidebar);
-    mainLayout->addWidget(sidebar);
+    m_sidebar = new QWidget(panelRow);
+    m_sidebar->setFixedWidth(LEFT_PANEL_WIDTH);
+    m_sidebar->setStyleSheet("background-color: #1a1a1a;");
+    setupSidebar(m_sidebar);
+    mainLayout->addWidget(m_sidebar);
+
+    m_leftPanelToggle = createPanelToggleButton(panelRow);
+    connect(m_leftPanelToggle, &QPushButton::clicked, this, [this]() {
+        setLeftPanelVisible(!m_leftPanelVisible);
+    });
+    mainLayout->addWidget(m_leftPanelToggle);
 
     auto *videoArea = new QWidget(panelRow);
     videoArea->setObjectName("videoArea");
@@ -62,11 +91,18 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     setupVideoArea(videoArea);
     mainLayout->addWidget(videoArea, 1);
 
-    auto *rightPanel = new QWidget(panelRow);
-    rightPanel->setFixedWidth(280);
-    rightPanel->setStyleSheet("background-color: #1a1a1a;");
-    setupRightPanel(rightPanel);
-    mainLayout->addWidget(rightPanel);
+    m_rightPanelToggle = createPanelToggleButton(panelRow);
+    connect(m_rightPanelToggle, &QPushButton::clicked, this, [this]() {
+        setRightPanelVisible(!m_rightPanelVisible);
+    });
+    mainLayout->addWidget(m_rightPanelToggle);
+
+    m_rightPanel = new QWidget(panelRow);
+    m_rightPanel->setFixedWidth(RIGHT_PANEL_WIDTH);
+    m_rightPanel->setStyleSheet("background-color: #1a1a1a;");
+    setupRightPanel(m_rightPanel);
+    mainLayout->addWidget(m_rightPanel);
+    updatePanelToggleButtons();
 
     centralLayout->addWidget(panelRow, 1);
 
@@ -91,12 +127,25 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     });
     m_clockTimer->start(1000);
 
+    m_saveDebounceTimer = new QTimer(this);
+    m_saveDebounceTimer->setSingleShot(true);
+    m_saveDebounceTimer->setInterval(150);
+    connect(m_saveDebounceTimer, &QTimer::timeout, this, &MainWindow::saveChannels);
+
     appendLog("System started", LogLevel::INFO);
     loadChannels();
+    if (m_viewers.isEmpty()) {
+        rebuildGrid();
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    if (m_saveDebounceTimer && m_saveDebounceTimer->isActive()) {
+        m_saveDebounceTimer->stop();
+        saveChannels();
+    }
+
     for (auto *viewer : m_viewers) {
         viewer->stop();
     }
@@ -109,12 +158,22 @@ MainWindow::~MainWindow()
 VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, bool autoReconnect)
 {
     auto *viewer = new VlcWidget(m_vlcInstance, m_gridWidget);
+    viewer->setAcceptDrops(true);
+    viewer->installEventFilter(this);
+    for (auto *child : viewer->findChildren<QWidget *>()) {
+        child->setAcceptDrops(true);
+        child->installEventFilter(this);
+    }
     viewer->setLogCallback([this](const QString &msg, int level) {
         appendLog(msg, static_cast<LogLevel>(level));
     });
     viewer->setAutoReconnect(autoReconnect);
     connect(viewer, &VlcWidget::doubleClicked, this, &MainWindow::openFullscreenTab);
     connect(viewer, &VlcWidget::requestFullscreen, this, &MainWindow::openFullscreenTab);
+    connect(viewer, &VlcWidget::requestEdit, this, [this](VlcWidget *v) {
+        int idx = m_viewers.indexOf(v);
+        if (idx >= 0) editChannel(idx);
+    });
     connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
         int idx = m_viewers.indexOf(v);
         if (idx >= 0) {
@@ -129,6 +188,7 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
                 }
             }
 
+            m_gridIndexes.remove(v);
             m_viewers.removeAt(idx);
             v->stop();
             v->deleteLater();
@@ -200,6 +260,7 @@ void MainWindow::addChannelToTable(const QString &name, const QString &url)
     auto *topRow = new QHBoxLayout();
     topRow->setContentsMargins(0, 0, 0, 0);
     auto *nameLabel = new QLabel(name, cellWidget);
+    nameLabel->setObjectName("nameLabel");
     nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
     auto *statusLabel = new QLabel("대기", cellWidget);
     statusLabel->setObjectName("statusLabel");
@@ -209,6 +270,7 @@ void MainWindow::addChannelToTable(const QString &name, const QString &url)
     topRow->addWidget(statusLabel);
 
     auto *urlLabel = new QLabel(url, cellWidget);
+    urlLabel->setObjectName("urlLabel");
     urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
     urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
 
@@ -224,6 +286,7 @@ int MainWindow::effectiveGridCols() const
     int count = m_viewers.size();
     if (m_gridCols != 0) return m_gridCols;
 
+    if (count == 0)      return 3;
     if (count <= 1)      return 1;
     else if (count <= 4) return 2;
     else if (count <= 9) return 3;
@@ -260,6 +323,7 @@ void MainWindow::setupSidebar(QWidget *parent)
     m_channelTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_channelTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_channelTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_channelTable->viewport()->installEventFilter(this);
     m_channelTable->verticalHeader()->setVisible(false);
     m_channelTable->horizontalHeader()->setVisible(false);
     m_channelTable->horizontalHeader()->setStretchLastSection(true);
@@ -284,6 +348,7 @@ void MainWindow::setupSidebar(QWidget *parent)
         QMenu menu(this);
         menu.setStyleSheet(Style::MENU);
         auto *fullscreenAction = menu.addAction("전체화면으로 열기");
+        auto *editAction = menu.addAction("채널 수정");
         menu.addSeparator();
         auto *removeAction = menu.addAction("채널 삭제");
 
@@ -292,6 +357,8 @@ void MainWindow::setupSidebar(QWidget *parent)
 
         if (selected == fullscreenAction && row < m_viewers.size()) {
             openFullscreenTab(m_viewers[row]);
+        } else if (selected == editAction) {
+            editChannel(row);
         } else if (selected == removeAction) {
             removeSelectedChannel();
         }
@@ -352,10 +419,10 @@ void MainWindow::setupVideoArea(QWidget *parent)
     gridPageLayout->setContentsMargins(0, 0, 0, 0);
     gridPageLayout->setSpacing(0);
 
-    auto *scrollArea = new QScrollArea(m_gridPage);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    scrollArea->setStyleSheet("QScrollArea { background-color: black; border: none; }");
+    m_gridScrollArea = new QScrollArea(m_gridPage);
+    m_gridScrollArea->setWidgetResizable(true);
+    m_gridScrollArea->setFrameShape(QFrame::NoFrame);
+    m_gridScrollArea->setStyleSheet("QScrollArea { background-color: black; border: none; }");
 
     auto *scrollContent = new QWidget();
     scrollContent->setStyleSheet("background-color: black;");
@@ -364,23 +431,83 @@ void MainWindow::setupVideoArea(QWidget *parent)
     scrollLayout->setSpacing(0);
 
     m_gridWidget = new QWidget(scrollContent);
+    m_gridWidget->setAcceptDrops(true);
     m_gridWidget->setStyleSheet("background-color: #333;");
     m_grid = new QGridLayout(m_gridWidget);
-    m_grid->setSpacing(1);
+    m_grid->setSpacing(GRID_SPACING);
     m_grid->setContentsMargins(0, 0, 0, 0);
     scrollLayout->addWidget(m_gridWidget);
     scrollLayout->addStretch(1);
 
-    scrollArea->setWidget(scrollContent);
-    gridPageLayout->addWidget(scrollArea, 1);
+    m_gridScrollArea->setWidget(scrollContent);
+    gridPageLayout->addWidget(m_gridScrollArea, 1);
 
     m_videoTabs->addTab(m_gridPage, "전체");
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::RightSide, nullptr);
     m_videoTabs->tabBar()->setTabButton(0, QTabBar::LeftSide, nullptr);
 
     m_gridWidget->installEventFilter(this);
+    m_gridScrollArea->viewport()->installEventFilter(this);
 
     layout->addWidget(m_videoTabs, 1);
+}
+
+// ============================================================
+// 좌우 패널 토글
+// ============================================================
+
+QPushButton *MainWindow::createPanelToggleButton(QWidget *parent)
+{
+    auto *button = new QPushButton(parent);
+    button->setFixedWidth(PANEL_TOGGLE_WIDTH);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
+    button->setFocusPolicy(Qt::NoFocus);
+    button->setCursor(Qt::PointingHandCursor);
+    button->setStyleSheet(
+        "QPushButton { color: #aaa; background-color: #222; border: none; "
+        "border-left: 1px solid #333; border-right: 1px solid #333; "
+        "font-size: 12px; padding: 0; }"
+        "QPushButton:hover { color: white; background-color: #333; }"
+        "QPushButton:pressed { background-color: #111; }");
+    return button;
+}
+
+void MainWindow::setLeftPanelVisible(bool visible)
+{
+    if (!m_sidebar || m_leftPanelVisible == visible) return;
+
+    m_leftPanelVisible = visible;
+    m_sidebar->setVisible(visible);
+    updatePanelToggleButtons();
+    QTimer::singleShot(0, this, [this]() {
+        updateGridCellSizes();
+    });
+}
+
+void MainWindow::setRightPanelVisible(bool visible)
+{
+    if (!m_rightPanel || m_rightPanelVisible == visible) return;
+
+    m_rightPanelVisible = visible;
+    m_rightPanel->setVisible(visible);
+    updatePanelToggleButtons();
+    QTimer::singleShot(0, this, [this]() {
+        updateGridCellSizes();
+    });
+}
+
+void MainWindow::updatePanelToggleButtons()
+{
+    if (m_leftPanelToggle) {
+        m_leftPanelToggle->setText(m_leftPanelVisible ? "◀" : "▶");
+        m_leftPanelToggle->setToolTip(m_leftPanelVisible ? "왼쪽 패널 숨기기" : "왼쪽 패널 보이기");
+        m_leftPanelToggle->setAccessibleName(m_leftPanelToggle->toolTip());
+    }
+    if (m_rightPanelToggle) {
+        m_rightPanelToggle->setText(m_rightPanelVisible ? "▶" : "◀");
+        m_rightPanelToggle->setToolTip(m_rightPanelVisible ? "오른쪽 패널 숨기기" : "오른쪽 패널 보이기");
+        m_rightPanelToggle->setAccessibleName(m_rightPanelToggle->toolTip());
+    }
 }
 
 // ============================================================
@@ -406,25 +533,7 @@ void MainWindow::setupRightPanel(QWidget *parent)
         "QTabBar::tab:selected { background-color: #1a1a1a; color: white; "
         "border-bottom: 2px solid #4a9eff; }");
 
-    // 로그 탭
-    auto *logTab = new QWidget();
-    auto *logLayout = new QVBoxLayout(logTab);
-    logLayout->setContentsMargins(0, 0, 0, 0);
-
-    m_logView = new QTextEdit(logTab);
-    m_logView->setReadOnly(true);
-    m_logView->setStyleSheet(
-        "QTextEdit { background-color: #1a1a1a; color: #ccc; border: none; "
-        "font-family: monospace; font-size: 11px; padding: 4px; }");
-    logLayout->addWidget(m_logView);
-    m_rightTabs->addTab(logTab, "로그");
-
-    // 파일 탭
-    auto *filesTab = new QWidget();
-    setupFilesTab(filesTab);
-    m_rightTabs->addTab(filesTab, "파일");
-
-    // 설정 탭
+    // 화면 탭
     auto *settingsTab = new QWidget();
     auto *settingsLayout = new QVBoxLayout(settingsTab);
     settingsLayout->setContentsMargins(12, 12, 12, 12);
@@ -455,13 +564,32 @@ void MainWindow::setupRightPanel(QWidget *parent)
             "QPushButton:hover { background-color: #2a2a2a; }");
         m_colBtnGroup->addButton(btn, values[i]);
         colBtnLayout->addWidget(btn);
-        if (i == 0) btn->setChecked(true);
+        if (values[i] == m_gridCols) btn->setChecked(true);
     }
 
     connect(m_colBtnGroup, &QButtonGroup::idClicked, this, &MainWindow::setGridColumns);
     settingsLayout->addLayout(colBtnLayout);
+    updateGridColumnButtonState();
     settingsLayout->addStretch();
-    m_rightTabs->addTab(settingsTab, "설정");
+    m_rightTabs->addTab(settingsTab, "화면");
+
+    // 녹화 탭
+    auto *filesTab = new QWidget();
+    setupFilesTab(filesTab);
+    m_rightTabs->addTab(filesTab, "녹화");
+
+    // 로그 탭
+    auto *logTab = new QWidget();
+    auto *logLayout = new QVBoxLayout(logTab);
+    logLayout->setContentsMargins(0, 0, 0, 0);
+
+    m_logView = new QTextEdit(logTab);
+    m_logView->setReadOnly(true);
+    m_logView->setStyleSheet(
+        "QTextEdit { background-color: #1a1a1a; color: #ccc; border: none; "
+        "font-family: monospace; font-size: 11px; padding: 4px; }");
+    logLayout->addWidget(m_logView);
+    m_rightTabs->addTab(logTab, "로그");
 
     layout->addWidget(m_rightTabs);
 }
@@ -503,8 +631,17 @@ void MainWindow::appendLog(const QString &message, LogLevel level)
 void MainWindow::setGridColumns(int cols)
 {
     m_gridCols = cols;
+    saveChannels();
     rebuildGrid();
     appendLog(QString("Grid columns: %1").arg(cols == 0 ? "Auto" : QString::number(cols)), LogLevel::DEBUG);
+}
+
+void MainWindow::updateGridColumnButtonState()
+{
+    if (!m_colBtnGroup) return;
+    if (auto *button = m_colBtnGroup->button(m_gridCols)) {
+        button->setChecked(true);
+    }
 }
 
 // ============================================================
@@ -529,6 +666,10 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     fullViewer->setSourceViewer(viewer);
     fullViewer->setLogCallback([this](const QString &msg, int level) {
         appendLog(msg, static_cast<LogLevel>(level));
+    });
+    connect(fullViewer, &VlcWidget::requestEdit, this, [this](VlcWidget *v) {
+        int idx = m_viewers.indexOf(v);
+        if (idx >= 0) editChannel(idx);
     });
     fullViewer->play(viewer->url(), viewer->name());
 
@@ -600,13 +741,30 @@ void MainWindow::saveChannels()
         obj["name"] = viewer->name();
         obj["url"] = viewer->url();
         obj["autoReconnect"] = viewer->autoReconnect();
+        obj["gridIndex"] = m_gridIndexes.contains(viewer)
+            ? m_gridIndexes.value(viewer)
+            : firstFreeGridIndex(viewer);
         arr.append(obj);
     }
 
+    QJsonObject root;
+    root["gridCols"] = m_gridCols;
+    root["channels"] = arr;
+
     QFile file(channelsFilePath());
     if (file.open(QIODevice::WriteOnly)) {
-        file.write(QJsonDocument(arr).toJson());
+        file.write(QJsonDocument(root).toJson());
     }
+}
+
+void MainWindow::scheduleSaveChannels()
+{
+    if (!m_saveDebounceTimer) {
+        saveChannels();
+        return;
+    }
+
+    m_saveDebounceTimer->start();
 }
 
 void MainWindow::loadChannels()
@@ -614,7 +772,20 @@ void MainWindow::loadChannels()
     QFile file(channelsFilePath());
     if (!file.open(QIODevice::ReadOnly)) return;
 
-    QJsonArray arr = QJsonDocument::fromJson(file.readAll()).array();
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    QJsonArray arr;
+    if (doc.isArray()) {
+        arr = doc.array();
+    } else {
+        QJsonObject root = doc.object();
+        int savedGridCols = root["gridCols"].toInt(m_gridCols);
+        if (savedGridCols >= 0 && savedGridCols <= 5) {
+            m_gridCols = savedGridCols;
+            updateGridColumnButtonState();
+        }
+        arr = root["channels"].toArray();
+    }
+
     for (const auto &val : arr) {
         QJsonObject obj = val.toObject();
         QString name = obj["name"].toString();
@@ -623,6 +794,11 @@ void MainWindow::loadChannels()
         if (name.isEmpty() || url.isEmpty()) continue;
 
         auto *viewer = createViewer(name, url, autoReconnect);
+        int gridIndex = obj.contains("gridIndex") ? obj["gridIndex"].toInt(-1) : -1;
+        if (gridIndex < 0 || viewerAtGridIndex(gridIndex) != nullptr) {
+            gridIndex = firstFreeGridIndex();
+        }
+        m_gridIndexes.insert(viewer, gridIndex);
         addChannelToTable(name, url);
         viewer->play(url, name);
         appendLog(QString("Channel loaded: %1").arg(name), LogLevel::DEBUG);
@@ -644,6 +820,7 @@ void MainWindow::addChannel()
     const QString url  = info->rtspUrl;
 
     auto *viewer = createViewer(name, url, info->autoReconnect);
+    m_gridIndexes.insert(viewer, firstFreeGridIndex());
     addChannelToTable(name, url);
     viewer->play(url, name);
     m_channelTable->selectRow(m_channelTable->rowCount() - 1);
@@ -651,6 +828,73 @@ void MainWindow::addChannel()
     appendLog(QString("Channel added: %1 (%2)").arg(name, url), LogLevel::INFO);
     saveChannels();
     rebuildGrid();
+}
+
+void MainWindow::editChannel(int row)
+{
+    if (row < 0 || row >= m_viewers.size()) return;
+
+    auto *viewer = m_viewers[row];
+    const ConnectionInfo current{
+        viewer->name(),
+        viewer->url(),
+        viewer->autoReconnect()
+    };
+
+    auto edited = ConnectionDialog::getConnectionInfo(this, current, "채널 수정");
+    if (!edited) return;
+
+    const QString name = edited->channelName.trimmed();
+    const QString url = edited->rtspUrl.trimmed();
+    if (name.isEmpty() || url.isEmpty()) return;
+
+    const bool nameChanged = name != current.channelName;
+    const bool urlChanged = url != current.rtspUrl;
+    const bool autoReconnectChanged = edited->autoReconnect != current.autoReconnect;
+    if (!nameChanged && !urlChanged && !autoReconnectChanged) return;
+
+    viewer->setAutoReconnect(edited->autoReconnect);
+    if (urlChanged) {
+        viewer->play(url, name);
+    } else if (nameChanged) {
+        viewer->setChannelInfo(name, url);
+    }
+
+    for (int i = 1; i < m_videoTabs->count(); ++i) {
+        auto *fullViewer = qobject_cast<VlcWidget *>(m_videoTabs->widget(i));
+        if (!fullViewer || fullViewer->sourceViewer() != viewer) continue;
+
+        fullViewer->setAutoReconnect(edited->autoReconnect);
+        if (urlChanged) {
+            fullViewer->play(url, name);
+        } else if (nameChanged) {
+            fullViewer->setChannelInfo(name, url);
+        }
+
+        if (auto *tabLabel = qobject_cast<QLabel *>(m_videoTabs->tabBar()->tabButton(i, QTabBar::LeftSide))) {
+            tabLabel->setText(name);
+        }
+    }
+
+    updateChannelTableRow(row, name, url);
+    saveChannels();
+
+    appendLog(QString("Channel updated: %1 (%2)").arg(name, url), LogLevel::INFO);
+}
+
+void MainWindow::updateChannelTableRow(int row, const QString &name, const QString &url)
+{
+    if (row < 0 || row >= m_channelTable->rowCount()) return;
+
+    auto *cell = m_channelTable->cellWidget(row, 0);
+    if (!cell) return;
+
+    if (auto *nameLabel = cell->findChild<QLabel *>("nameLabel")) {
+        nameLabel->setText(name);
+    }
+    if (auto *urlLabel = cell->findChild<QLabel *>("urlLabel")) {
+        urlLabel->setText(url);
+    }
 }
 
 void MainWindow::removeSelectedChannel()
@@ -680,6 +924,7 @@ void MainWindow::removeSelectedChannel()
                 }
             }
 
+            m_gridIndexes.remove(viewer);
             m_viewers.removeAt(row);
             viewer->stop();
             viewer->deleteLater();
@@ -696,49 +941,452 @@ void MainWindow::removeSelectedChannel()
 // 그리드
 // ============================================================
 
+int MainWindow::firstFreeGridIndex(VlcWidget *except) const
+{
+    QSet<int> used;
+    for (auto *viewer : m_viewers) {
+        if (viewer == except) continue;
+        int index = m_gridIndexes.value(viewer, -1);
+        if (index >= 0) used.insert(index);
+    }
+
+    int index = 0;
+    while (used.contains(index)) {
+        ++index;
+    }
+    return index;
+}
+
+int MainWindow::maxAssignedGridIndex() const
+{
+    int maxIndex = -1;
+    for (auto *viewer : m_viewers) {
+        maxIndex = qMax(maxIndex, m_gridIndexes.value(viewer, -1));
+    }
+    return maxIndex;
+}
+
+VlcWidget *MainWindow::viewerAtGridIndex(int index, VlcWidget *except) const
+{
+    for (auto *viewer : m_viewers) {
+        if (viewer == except) continue;
+        if (m_gridIndexes.value(viewer, -1) == index) {
+            return viewer;
+        }
+    }
+    return nullptr;
+}
+
+void MainWindow::moveViewerToGridIndex(VlcWidget *viewer, int targetIndex)
+{
+    if (!viewer || targetIndex < 0 || !m_viewers.contains(viewer)) return;
+
+    int sourceIndex = m_gridIndexes.contains(viewer)
+        ? m_gridIndexes.value(viewer)
+        : firstFreeGridIndex(viewer);
+    if (sourceIndex == targetIndex) return;
+
+    if (auto *other = viewerAtGridIndex(targetIndex, viewer)) {
+        m_gridIndexes.insert(other, sourceIndex);
+    }
+    m_gridIndexes.insert(viewer, targetIndex);
+
+    rebuildGrid();
+    scheduleSaveChannels();
+    appendLog(QString("Channel moved: %1 → grid index %2").arg(viewer->name()).arg(targetIndex + 1),
+              LogLevel::DEBUG);
+}
+
 void MainWindow::rebuildGrid()
 {
-    qDeleteAll(m_emptyLabels);
-    m_emptyLabels.clear();
-
-    for (auto *viewer : m_viewers) {
-        m_grid->removeWidget(viewer);
-        viewer->hide();
-    }
+    hideDropHighlight();
 
     delete m_grid;
     m_grid = new QGridLayout(m_gridWidget);
-    m_grid->setSpacing(1);
+    m_grid->setSpacing(GRID_SPACING);
     m_grid->setContentsMargins(0, 0, 0, 0);
 
-    int count = m_viewers.size();
-    if (count == 0) return;
-
     int cols = effectiveGridCols();
-    int rows = (count + cols - 1) / cols;
-    int totalCells = rows * cols;
 
     for (int c = 0; c < cols; ++c) m_grid->setColumnStretch(c, 1);
 
-    for (int i = 0; i < count; ++i) {
-        m_grid->addWidget(m_viewers[i], i / cols, i % cols);
-        m_viewers[i]->show();
-    }
-
-    for (int i = count; i < totalCells; ++i) {
-        auto *label = new QLabel("No Stream", m_gridWidget);
-        label->setAlignment(Qt::AlignCenter);
-        label->setStyleSheet("color: #444; font-size: 13px; background-color: #111;");
-        m_emptyLabels.append(label);
-        m_grid->addWidget(label, i / cols, i % cols);
+    for (auto *viewer : m_viewers) {
+        int index = m_gridIndexes.value(viewer, -1);
+        if (index < 0 || (viewerAtGridIndex(index, viewer) != nullptr)) {
+            index = firstFreeGridIndex(viewer);
+            m_gridIndexes.insert(viewer, index);
+        }
+        viewer->setProperty("gridIndex", index);
     }
 
     updateGridCellSizes();
 }
 
+bool MainWindow::startChannelDragIfNeeded(QMouseEvent *event)
+{
+    if (!event || m_channelDragRow < 0) return false;
+    if (!(event->buttons() & Qt::LeftButton)) return false;
+    if ((event->position().toPoint() - m_channelDragStartPos).manhattanLength()
+        < QApplication::startDragDistance()) {
+        return false;
+    }
+    if (m_channelDragRow >= m_viewers.size()) return false;
+
+    m_channelDragStarted = true;
+    auto *drag = new QDrag(m_channelTable);
+    auto *mimeData = new QMimeData();
+    mimeData->setData(CHANNEL_DRAG_MIME, QByteArray::number(m_channelDragRow));
+    mimeData->setText(m_viewers[m_channelDragRow]->name());
+    drag->setMimeData(mimeData);
+
+    drag->exec(Qt::MoveAction);
+    hideDropHighlight();
+    m_channelTable->clearSelection();
+    m_channelTable->setCurrentIndex(QModelIndex());
+    if (auto *selection = m_channelTable->selectionModel()) {
+        selection->clear();
+    }
+    m_lastChannelClickedRow = -1;
+    m_channelDragRow = -1;
+    return true;
+}
+
+VlcWidget *MainWindow::viewerForDragObject(QObject *obj) const
+{
+    for (QObject *current = obj; current; current = current->parent()) {
+        if (auto *viewer = qobject_cast<VlcWidget *>(current)) {
+            return m_viewers.contains(viewer) ? viewer : nullptr;
+        }
+        if (current == m_gridWidget) break;
+    }
+    return nullptr;
+}
+
+bool MainWindow::startViewerDragIfNeeded(QMouseEvent *event)
+{
+    if (!event || !m_viewerDragSource) return false;
+    if (!(event->buttons() & Qt::LeftButton)) return false;
+    if ((event->position().toPoint() - m_viewerDragStartPos).manhattanLength()
+        < QApplication::startDragDistance()) {
+        return false;
+    }
+
+    m_viewerDragStarted = true;
+
+    auto *drag = new QDrag(m_viewerDragSource);
+    auto *mimeData = new QMimeData();
+    quintptr ptr = reinterpret_cast<quintptr>(m_viewerDragSource);
+    mimeData->setData(VIEWER_DRAG_MIME, QByteArray::number(ptr));
+    mimeData->setText(m_viewerDragSource->name());
+    drag->setMimeData(mimeData);
+
+    drag->exec(Qt::MoveAction);
+    hideDropHighlight();
+    m_viewerDragSource = nullptr;
+    m_viewerDragStarted = false;
+    return true;
+}
+
+void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers)
+{
+    if (!m_channelTable || row < 0 || row >= m_channelTable->rowCount()) {
+        if (m_channelTable) {
+            m_channelTable->clearSelection();
+            m_channelTable->setCurrentIndex(QModelIndex());
+        }
+        m_lastChannelClickedRow = -1;
+        return;
+    }
+
+    auto *selection = m_channelTable->selectionModel();
+    auto *model = m_channelTable->model();
+    if (!selection || !model) return;
+
+    QModelIndex index = model->index(row, 0);
+    const bool additive = modifiers.testFlag(Qt::ControlModifier)
+        || modifiers.testFlag(Qt::MetaModifier);
+    const bool range = modifiers.testFlag(Qt::ShiftModifier)
+        && m_lastChannelClickedRow >= 0
+        && m_lastChannelClickedRow < m_channelTable->rowCount();
+
+    if (range) {
+        int from = qMin(m_lastChannelClickedRow, row);
+        int to = qMax(m_lastChannelClickedRow, row);
+        QItemSelection rangeSelection(model->index(from, 0), model->index(to, 0));
+        selection->select(rangeSelection,
+                          QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+    } else if (additive) {
+        QItemSelection rowSelection(index, index);
+        bool selected = selection->isRowSelected(row, QModelIndex());
+        selection->select(rowSelection,
+                          (selected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select)
+                              | QItemSelectionModel::Rows);
+        m_lastChannelClickedRow = row;
+    } else {
+        QItemSelection rowSelection(index, index);
+        selection->select(rowSelection,
+                          QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        m_lastChannelClickedRow = row;
+    }
+
+    selection->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+}
+
+int MainWindow::gridIndexForDropTarget(QObject *obj, const QPoint &pos) const
+{
+    if (!obj) return -1;
+
+    for (QObject *current = obj; current; current = current->parent()) {
+        QVariant directIndex = current->property("gridIndex");
+        if (directIndex.isValid()) {
+            bool ok = false;
+            int index = directIndex.toInt(&ok);
+            if (ok && index >= 0) return index;
+        }
+        if (current == m_gridWidget) break;
+    }
+
+    auto *widget = qobject_cast<QWidget *>(obj);
+    if (!widget || !m_gridWidget) return -1;
+
+    QPoint gridPos = (widget == m_gridWidget) ? pos : widget->mapTo(m_gridWidget, pos);
+    if (gridPos.x() < 0 || gridPos.y() < 0) return -1;
+
+    int cols = effectiveGridCols();
+    int gridWidth = m_gridScrollArea ? m_gridScrollArea->viewport()->width() : m_gridWidget->width();
+    int cellWidth = qMax(1, (gridWidth - (cols - 1) * GRID_SPACING) / cols);
+    int cellHeight = cellWidth * 3 / 4 + VIEWER_INFO_BAR_HEIGHT;
+    int strideX = cellWidth + GRID_SPACING;
+    int strideY = cellHeight + GRID_SPACING;
+    int col = gridPos.x() / strideX;
+    int row = gridPos.y() / strideY;
+
+    if (col < 0 || col >= cols) return -1;
+    return row * cols + col;
+}
+
+QFrame *MainWindow::createGridCell()
+{
+    auto *cell = new QFrame(m_gridWidget);
+    cell->setObjectName("gridCell");
+    cell->setAcceptDrops(true);
+    cell->installEventFilter(this);
+    cell->setProperty("dropHighlighted", false);
+    cell->setStyleSheet(GRID_CELL_STYLE);
+
+    auto *layout = new QVBoxLayout(cell);
+    layout->setContentsMargins(2, 2, 2, 2);
+    layout->setSpacing(0);
+    return cell;
+}
+
+void MainWindow::clearGridCell(QFrame *cell)
+{
+    if (!cell || !cell->layout()) return;
+
+    auto *layout = cell->layout();
+    while (auto *item = layout->takeAt(0)) {
+        if (auto *widget = item->widget()) {
+            if (auto *viewer = qobject_cast<VlcWidget *>(widget)) {
+                viewer->setParent(m_gridWidget);
+                viewer->hide();
+            } else {
+                widget->deleteLater();
+            }
+        }
+        delete item;
+    }
+}
+
+void MainWindow::ensureGridCellCount(int count)
+{
+    while (m_gridCells.size() < count) {
+        m_gridCells.append(createGridCell());
+    }
+
+    while (m_gridCells.size() > count) {
+        auto *cell = m_gridCells.takeLast();
+        clearGridCell(cell);
+        m_grid->removeWidget(cell);
+        delete cell;
+    }
+}
+
+void MainWindow::setGridCellHighlighted(int index, bool highlighted)
+{
+    if (index < 0 || index >= m_gridCells.size()) return;
+    auto *cell = m_gridCells[index];
+    if (cell->property("dropHighlighted").toBool() == highlighted) return;
+
+    cell->setProperty("dropHighlighted", highlighted);
+    cell->setStyleSheet(highlighted ? GRID_CELL_HIGHLIGHT_STYLE : GRID_CELL_STYLE);
+}
+
+void MainWindow::showDropHighlight(int index)
+{
+    if (index < 0 || index == m_dropHighlightIndex) return;
+
+    setGridCellHighlighted(m_dropHighlightIndex, false);
+    m_dropHighlightIndex = index;
+    setGridCellHighlighted(m_dropHighlightIndex, true);
+}
+
+void MainWindow::hideDropHighlight()
+{
+    if (m_dropHighlightIndex < 0) return;
+
+    setGridCellHighlighted(m_dropHighlightIndex, false);
+    m_dropHighlightIndex = -1;
+}
+
+bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
+{
+    if (!event) return false;
+
+    auto hasChannelMime = [](const QMimeData *mimeData) {
+        return mimeData
+            && (mimeData->hasFormat(CHANNEL_DRAG_MIME)
+                || mimeData->hasFormat(VIEWER_DRAG_MIME));
+    };
+
+    if (event->type() == QEvent::DragEnter) {
+        auto *dragEvent = static_cast<QDragEnterEvent *>(event);
+        if (!hasChannelMime(dragEvent->mimeData())) return false;
+
+        int targetIndex = gridIndexForDropTarget(obj, dragEvent->position().toPoint());
+        if (targetIndex < 0) {
+            hideDropHighlight();
+            return false;
+        }
+
+        showDropHighlight(targetIndex);
+        dragEvent->acceptProposedAction();
+        return true;
+    }
+
+    if (event->type() == QEvent::DragMove) {
+        auto *dragEvent = static_cast<QDragMoveEvent *>(event);
+        if (!hasChannelMime(dragEvent->mimeData())) return false;
+
+        int targetIndex = gridIndexForDropTarget(obj, dragEvent->position().toPoint());
+        if (targetIndex < 0) {
+            hideDropHighlight();
+            return false;
+        }
+
+        showDropHighlight(targetIndex);
+        dragEvent->acceptProposedAction();
+        return true;
+    }
+
+    if (event->type() == QEvent::Drop) {
+        auto *dropEvent = static_cast<QDropEvent *>(event);
+        if (!hasChannelMime(dropEvent->mimeData())) return false;
+
+        int targetIndex = gridIndexForDropTarget(obj, dropEvent->position().toPoint());
+        bool ok = false;
+        VlcWidget *viewer = nullptr;
+        if (dropEvent->mimeData()->hasFormat(CHANNEL_DRAG_MIME)) {
+            int row = dropEvent->mimeData()->data(CHANNEL_DRAG_MIME).toInt(&ok);
+            if (ok && row >= 0 && row < m_viewers.size()) {
+                viewer = m_viewers[row];
+            }
+        } else if (dropEvent->mimeData()->hasFormat(VIEWER_DRAG_MIME)) {
+            quintptr ptr = dropEvent->mimeData()->data(VIEWER_DRAG_MIME).toULongLong(&ok);
+            auto *candidate = reinterpret_cast<VlcWidget *>(ptr);
+            if (ok && m_viewers.contains(candidate)) {
+                viewer = candidate;
+            }
+        }
+
+        if (targetIndex < 0 || !viewer) {
+            hideDropHighlight();
+            return false;
+        }
+
+        hideDropHighlight();
+        moveViewerToGridIndex(viewer, targetIndex);
+        dropEvent->acceptProposedAction();
+        return true;
+    }
+
+    return false;
+}
+
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
-    if (obj == m_gridWidget && event->type() == QEvent::Resize) {
+    if (m_channelTable && obj == m_channelTable->viewport()) {
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                m_channelDragStartPos = mouseEvent->position().toPoint();
+                m_channelDragRow = m_channelTable->rowAt(m_channelDragStartPos.y());
+                m_channelDragStarted = false;
+                if (m_channelDragRow >= 0) {
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            if (m_channelDragRow >= 0) {
+                startChannelDragIfNeeded(static_cast<QMouseEvent *>(event));
+                return true;
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                int pressRow = m_channelDragRow;
+                bool wasDrag = m_channelDragStarted;
+                int releaseRow = m_channelTable->rowAt(mouseEvent->position().toPoint().y());
+                m_channelDragRow = -1;
+                m_channelDragStarted = false;
+
+                if (!wasDrag && pressRow >= 0 && pressRow == releaseRow) {
+                    selectChannelRowFromClick(pressRow, mouseEvent->modifiers());
+                }
+                return true;
+            }
+            m_channelDragRow = -1;
+            m_channelDragStarted = false;
+        }
+    }
+
+    const bool isViewerMouseEvent =
+        event->type() == QEvent::MouseButtonPress
+        || event->type() == QEvent::MouseMove
+        || event->type() == QEvent::MouseButtonRelease;
+    if (isViewerMouseEvent) {
+        auto *viewer = viewerForDragObject(obj);
+        if (viewer && event->type() == QEvent::MouseButtonPress) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                m_viewerDragSource = viewer;
+                m_viewerDragStartPos = mouseEvent->position().toPoint();
+                m_viewerDragStarted = false;
+            }
+        } else if (viewer && event->type() == QEvent::MouseMove) {
+            if (m_viewerDragSource == viewer) {
+                if (startViewerDragIfNeeded(static_cast<QMouseEvent *>(event))) {
+                    return true;
+                }
+            }
+        } else if (viewer && event->type() == QEvent::MouseButtonRelease) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton && m_viewerDragSource == viewer) {
+                m_viewerDragSource = nullptr;
+                m_viewerDragStarted = false;
+            }
+        }
+    }
+
+    if (handleGridDragEvent(obj, event)) {
+        return true;
+    }
+
+    const bool isGridResize = obj == m_gridWidget && event->type() == QEvent::Resize;
+    const bool isViewportResize = m_gridScrollArea
+        && obj == m_gridScrollArea->viewport()
+        && event->type() == QEvent::Resize;
+    if (isGridResize || isViewportResize) {
         updateGridCellSizes();
     }
     return QMainWindow::eventFilter(obj, event);
@@ -746,25 +1394,80 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 
 void MainWindow::updateGridCellSizes()
 {
-    int count = m_viewers.size();
-    if (count == 0 || !m_grid) return;
+    if (!m_grid) return;
 
     int cols = effectiveGridCols();
-    int gridWidth = m_gridWidget->parentWidget() ? m_gridWidget->parentWidget()->width() : m_gridWidget->width();
-    int cellWidth = (gridWidth - (cols - 1)) / cols;
-    int infoBarHeight = 36;
-    int cellHeight = cellWidth * 3 / 4 + infoBarHeight;
+    int gridWidth = m_gridScrollArea ? m_gridScrollArea->viewport()->width() : m_gridWidget->width();
+    if (gridWidth <= 0) {
+        gridWidth = m_gridWidget->parentWidget() ? m_gridWidget->parentWidget()->width() : m_gridWidget->width();
+    }
+    int viewportHeight = m_gridScrollArea ? m_gridScrollArea->viewport()->height() : m_gridWidget->height();
+    if (viewportHeight <= 0) {
+        viewportHeight = m_gridWidget->parentWidget() ? m_gridWidget->parentWidget()->height() : m_gridWidget->height();
+    }
+
+    int cellWidth = qMax(1, (gridWidth - (cols - 1) * GRID_SPACING) / cols);
+    int cellHeight = cellWidth * 3 / 4 + VIEWER_INFO_BAR_HEIGHT;
+    int requiredRows = qMax(1, (maxAssignedGridIndex() + cols) / cols);
+    int rowsForViewport = qMax(1, (viewportHeight + GRID_SPACING + cellHeight) / (cellHeight + GRID_SPACING));
+    int rows = qMax(requiredRows, rowsForViewport);
+    int totalCells = rows * cols;
+
+    QHash<int, VlcWidget *> occupied;
+    for (auto *viewer : m_viewers) {
+        int index = m_gridIndexes.value(viewer, -1);
+        if (index >= 0 && index < totalCells) {
+            occupied.insert(index, viewer);
+        }
+    }
+
+    ensureGridCellCount(totalCells);
 
     for (auto *viewer : m_viewers) {
-        viewer->setFixedHeight(cellHeight);
+        viewer->setFixedSize(qMax(1, cellWidth - 4), qMax(1, cellHeight - 4));
     }
-    for (auto *label : m_emptyLabels) {
-        label->setFixedHeight(cellHeight);
+
+    for (int i = 0; i < m_gridCells.size(); ++i) {
+        auto *cell = m_gridCells[i];
+        cell->setProperty("gridIndex", i);
+        cell->setFixedSize(cellWidth, cellHeight);
+        m_grid->addWidget(cell, i / cols, i % cols);
+        setGridCellHighlighted(i, i == m_dropHighlightIndex);
+
+        auto *layout = qobject_cast<QVBoxLayout *>(cell->layout());
+        if (!layout) continue;
+
+        VlcWidget *viewer = occupied.value(i, nullptr);
+        QWidget *current = layout->count() > 0 ? layout->itemAt(0)->widget() : nullptr;
+
+        if (viewer) {
+            if (current != viewer) {
+                clearGridCell(cell);
+                if (auto *oldParent = viewer->parentWidget(); oldParent && oldParent->layout()) {
+                    oldParent->layout()->removeWidget(viewer);
+                }
+                viewer->setParent(cell);
+                layout->addWidget(viewer);
+            }
+            viewer->show();
+        } else if (!qobject_cast<QLabel *>(current)) {
+            clearGridCell(cell);
+            auto *label = new QLabel("No Stream", cell);
+            label->setAlignment(Qt::AlignCenter);
+            label->setStyleSheet("color: #444; font-size: 13px; background-color: #111;");
+            label->setAcceptDrops(true);
+            label->installEventFilter(this);
+            layout->addWidget(label);
+        }
+        cell->show();
     }
+
+    int gridHeight = rows * cellHeight + (rows - 1) * GRID_SPACING;
+    m_gridWidget->setFixedHeight(gridHeight);
 }
 
 // ============================================================
-// 파일 탭 (스냅샷/녹화 목록)
+// 녹화 탭 (스냅샷/녹화 목록)
 // ============================================================
 
 QString MainWindow::snapshotsDir()

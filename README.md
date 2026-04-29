@@ -1,4 +1,4 @@
-# ZiiLab Viewer
+# 영상관리시스템
 
 RTSP 기반 멀티채널 영상 관제 시스템
 
@@ -89,7 +89,7 @@ install_name_tool -change @rpath/libvlccore.9.dylib @executable_path/../Framewor
 
 ```bash
 # hdiutil로 DMG 생성
-hdiutil create -volname "ZiiLab Viewer" -srcfolder viewer.app -ov -format UDZO ZiiLabViewer.dmg
+hdiutil create -volname "영상관리시스템" -srcfolder viewer.app -ov -format UDZO 영상관리시스템.dmg
 ```
 
 ### Windows
