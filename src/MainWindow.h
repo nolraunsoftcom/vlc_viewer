@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QLabel>
 #include <QPoint>
+#include <QPointer>
 #include <QSet>
 #include <QTimer>
 #include <QTableWidget>
@@ -17,6 +18,7 @@
 #include "ConnectionDialog.h"
 
 class VlcWidget;
+class ChannelInfoDialog;
 class StatusBar;
 class QScrollArea;
 class QPushButton;
@@ -53,6 +55,7 @@ private:
     QTimer *m_clockTimer = nullptr;
     QTimer *m_saveDebounceTimer = nullptr;
     QTableWidget *m_channelTable = nullptr;
+    QHash<VlcWidget *, QPointer<ChannelInfoDialog>> m_channelInfoDialogs;
     int m_gridCols = 3;
 
     // 좌우 패널
@@ -123,6 +126,10 @@ private:
     void updatePanelToggleButtons();
     void editChannel(VlcWidget *viewer);
     void updateChannelTableRow(VlcWidget *viewer);
+    void updateChannelStatsRows();
+    void showChannelInfo(VlcWidget *viewer);
+    void closeChannelInfo(VlcWidget *viewer);
+    void refreshChannelInfoDialogs();
     bool removeChannel(VlcWidget *viewer);
     int firstFreeGridIndex(VlcWidget *except = nullptr) const;
     int maxAssignedGridIndex() const;

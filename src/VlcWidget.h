@@ -23,11 +23,38 @@ public:
     ~VlcWidget();
 
     struct Stats {
-        double fps;
-        double bitrate_kbps;
-        int displayed_pictures;
-        int lost_pictures;
-        bool playing;
+        bool playing = false;
+        bool valid = false;
+
+        double fps = 0.0;               // output_fps alias for existing summaries
+        double nominal_fps = 0.0;       // video track metadata
+        double output_fps = 0.0;        // displayed_pictures delta / elapsed
+
+        double bitrate_kbps = 0.0;      // demux_bitrate_kbps alias
+        double input_bitrate_kbps = 0.0;
+        double demux_bitrate_kbps = 0.0;
+        double send_bitrate_kbps = 0.0;
+
+        qint64 read_bytes = 0;
+        qint64 demux_read_bytes = 0;
+        qint64 sent_bytes = 0;
+
+        int demux_corrupted = 0;
+        int demux_discontinuity = 0;
+        int decoded_video = 0;
+        int decoded_audio = 0;
+        int displayed_pictures = 0;
+        int lost_pictures = 0;
+        int played_abuffers = 0;
+        int lost_abuffers = 0;
+        int sent_packets = 0;
+
+        int displayed_delta = 0;
+        int lost_delta = 0;
+        int corrupted_delta = 0;
+        int discontinuity_delta = 0;
+
+        qint64 updated_at_ms = 0;
     };
 
     void play(const QString &url, const QString &name = QString());
@@ -43,6 +70,7 @@ public:
     QString url() const { return m_url; }
     QString name() const { return m_name; }
     void updateTime(const QString &timeStr);
+    void refreshStats(qint64 nowMs);
     Stats getStats() const;
     bool takeSnapshot(const QString &filePath);
 
@@ -65,6 +93,7 @@ public slots:
 signals:
     void doubleClicked(VlcWidget *widget);
     void requestFullscreen(VlcWidget *widget);
+    void requestInfo(VlcWidget *widget);
     void requestEdit(VlcWidget *widget);
     void requestRemove(VlcWidget *widget);
     void snapshotTaken(const QString &filePath);
@@ -111,9 +140,17 @@ private:
 
     // 비디오 트랙 fps 캐시 — 연결 세션 동안 고정값이므로 반복 조회 회피
     double m_cachedFps = 0.0;
+    Stats m_stats;
+    bool m_hasStatsSample = false;
+    qint64 m_lastStatsAtMs = 0;
+    int m_lastDisplayedPictures = 0;
+    int m_lastLostPictures = 0;
+    int m_lastDemuxCorrupted = 0;
+    int m_lastDemuxDiscontinuity = 0;
 
     std::function<void(const QString &, int)> m_logCallback;
     void log(const QString &msg, int level = 1);
+    void resetStatsCache();
     void attachToSurface();
     void detachEvents();
     void setupEvents();

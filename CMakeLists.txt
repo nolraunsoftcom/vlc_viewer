@@ -56,7 +56,9 @@ if(APPLE)
         src/MainWindow.cpp
         src/VlcWidget.cpp
         src/ConnectionDialog.cpp
+        src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
+        src/ResourceMonitor.cpp
         resources/resources.qrc
         ${APP_ICON_MACOS}
     )
@@ -66,7 +68,9 @@ elseif(WIN32)
         src/MainWindow.cpp
         src/VlcWidget.cpp
         src/ConnectionDialog.cpp
+        src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
+        src/ResourceMonitor.cpp
         resources/resources.qrc
         ${APP_ICON_WINDOWS}
     )
@@ -76,13 +80,19 @@ else()
         src/MainWindow.cpp
         src/VlcWidget.cpp
         src/ConnectionDialog.cpp
+        src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
+        src/ResourceMonitor.cpp
         resources/resources.qrc
     )
 endif()
 
 target_include_directories(viewer PRIVATE ${VLC_INCLUDE_DIR})
 target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent ${VLC_LIBRARY})
+
+if(WIN32)
+    target_link_libraries(viewer PRIVATE Psapi)
+endif()
 
 if(APPLE)
     set_target_properties(viewer PROPERTIES

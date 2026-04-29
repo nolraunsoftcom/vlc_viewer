@@ -149,6 +149,7 @@ libvlc_media_t *VlcWidget::openMedia(const QString &url, bool withRecording)
 void VlcWidget::play(const QString &url, const QString &name)
 {
     stop();
+    resetStatsCache();
 
     m_url = url;
     m_name = name;
@@ -295,6 +296,7 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
             }
         }
 
+        self->m_stats.nominal_fps = self->m_cachedFps;
         self->log(QString("[%1] Stream connected").arg(self->m_name), 1);
     }, Qt::QueuedConnection);
 }
@@ -369,6 +371,7 @@ void VlcWidget::tryReconnect()
 
     // 이전 플레이어 정리
     cleanupPlayer();
+    resetStatsCache();
 
     setStatus(Status::Reconnecting);
     showStatus(QString("재연결중... (%1/%2)").arg(m_reconnectCount).arg(MAX_RECONNECT));
@@ -433,6 +436,8 @@ void VlcWidget::stop()
 
     m_url.clear();
     m_name.clear();
+    m_cachedFps = 0.0;
+    resetStatsCache();
     m_videoSurface->hide();
     m_nameLabel->hide();
     m_placeholder->show();
@@ -446,27 +451,84 @@ bool VlcWidget::isPlaying() const
     return libvlc_media_player_is_playing(m_player);
 }
 
-VlcWidget::Stats VlcWidget::getStats() const
+void VlcWidget::resetStatsCache()
+{
+    m_stats = Stats{};
+    m_stats.nominal_fps = m_cachedFps;
+    m_hasStatsSample = false;
+    m_lastStatsAtMs = 0;
+    m_lastDisplayedPictures = 0;
+    m_lastLostPictures = 0;
+    m_lastDemuxCorrupted = 0;
+    m_lastDemuxDiscontinuity = 0;
+}
+
+void VlcWidget::refreshStats(qint64 nowMs)
 {
     Stats s{};
+    s.updated_at_ms = nowMs;
     s.playing = isPlaying();
-    s.fps = m_cachedFps;  // onPlaying 시점에 1회 계산된 값
+    s.nominal_fps = m_cachedFps;
 
-    if (!m_player || !s.playing) return s;
+    if (!m_player || !s.playing) {
+        m_stats = s;
+        m_hasStatsSample = false;
+        return;
+    }
 
     libvlc_media_t *media = libvlc_media_player_get_media(m_player);
     if (media) {
         libvlc_media_stats_t stats{};
         if (libvlc_media_get_stats(media, &stats)) {
-            // f_demux_bitrate 단위: bytes/µs → × 8000 = kbit/s
-            s.bitrate_kbps = static_cast<double>(stats.f_demux_bitrate) * 8000.0;
+            // libVLC bitrate 단위: bytes/µs → × 8000 = kbit/s
+            s.valid = true;
+            s.input_bitrate_kbps = static_cast<double>(stats.f_input_bitrate) * 8000.0;
+            s.demux_bitrate_kbps = static_cast<double>(stats.f_demux_bitrate) * 8000.0;
+            s.send_bitrate_kbps = static_cast<double>(stats.f_send_bitrate) * 8000.0;
+            s.bitrate_kbps = s.demux_bitrate_kbps;
+
+            s.read_bytes = stats.i_read_bytes;
+            s.demux_read_bytes = stats.i_demux_read_bytes;
+            s.sent_bytes = stats.i_sent_bytes;
+
+            s.demux_corrupted = stats.i_demux_corrupted;
+            s.demux_discontinuity = stats.i_demux_discontinuity;
+            s.decoded_video = stats.i_decoded_video;
+            s.decoded_audio = stats.i_decoded_audio;
             s.displayed_pictures = stats.i_displayed_pictures;
             s.lost_pictures = stats.i_lost_pictures;
+            s.played_abuffers = stats.i_played_abuffers;
+            s.lost_abuffers = stats.i_lost_abuffers;
+            s.sent_packets = stats.i_sent_packets;
+
+            if (m_hasStatsSample && nowMs > m_lastStatsAtMs) {
+                const double elapsedSeconds = static_cast<double>(nowMs - m_lastStatsAtMs) / 1000.0;
+                s.displayed_delta = qMax(0, s.displayed_pictures - m_lastDisplayedPictures);
+                s.lost_delta = qMax(0, s.lost_pictures - m_lastLostPictures);
+                s.corrupted_delta = qMax(0, s.demux_corrupted - m_lastDemuxCorrupted);
+                s.discontinuity_delta = qMax(0, s.demux_discontinuity - m_lastDemuxDiscontinuity);
+                if (elapsedSeconds > 0.0) {
+                    s.output_fps = static_cast<double>(s.displayed_delta) / elapsedSeconds;
+                    s.fps = s.output_fps;
+                }
+            }
+
+            m_lastDisplayedPictures = s.displayed_pictures;
+            m_lastLostPictures = s.lost_pictures;
+            m_lastDemuxCorrupted = s.demux_corrupted;
+            m_lastDemuxDiscontinuity = s.demux_discontinuity;
+            m_lastStatsAtMs = nowMs;
+            m_hasStatsSample = true;
         }
         libvlc_media_release(media);
     }
 
-    return s;
+    m_stats = s;
+}
+
+VlcWidget::Stats VlcWidget::getStats() const
+{
+    return m_stats;
 }
 
 void VlcWidget::mouseDoubleClickEvent(QMouseEvent *event)
@@ -490,6 +552,7 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
     menu.setStyleSheet(Style::MENU);
 
     auto *fullscreenAction = menu.addAction("전체화면으로 열기");
+    auto *infoAction = menu.addAction("채널 정보");
     auto *editAction = menu.addAction("채널 수정");
     auto *snapshotAction = menu.addAction("스냅샷 저장");
     VlcWidget *t = recordingTarget();
@@ -502,6 +565,7 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
     auto *removeAction = menu.addAction("채널 삭제");
 
     fullscreenAction->setEnabled(!m_url.isEmpty() && !m_isFullscreen);
+    infoAction->setEnabled(!m_url.isEmpty() && (!m_isFullscreen || m_sourceViewer));
     editAction->setEnabled(!m_url.isEmpty() && (!m_isFullscreen || m_sourceViewer));
     snapshotAction->setEnabled(isPlaying());
     recordAction->setEnabled(t && !starting && (rec || t->isPlaying()));
@@ -513,6 +577,8 @@ void VlcWidget::showContextMenu(const QPoint &globalPos)
 
     if (selected == fullscreenAction) {
         emit requestFullscreen(this);
+    } else if (selected == infoAction) {
+        emit requestInfo(m_isFullscreen && m_sourceViewer ? m_sourceViewer.data() : this);
     } else if (selected == editAction) {
         emit requestEdit(m_isFullscreen && m_sourceViewer ? m_sourceViewer.data() : this);
     } else if (selected == reconnectAction) {
@@ -657,6 +723,7 @@ bool VlcWidget::restartPlayerPreserving(bool withRecording)
 {
     QString url = m_url;
     cleanupPlayer();  // future 는 여기선 미사용
+    resetStatsCache();
     libvlc_media_t *media = openMedia(url, withRecording);
     if (!media) return false;
     m_player = libvlc_media_player_new_from_media(media);
@@ -671,6 +738,7 @@ bool VlcWidget::restartPlayerPreserving(bool withRecording)
 
 bool VlcWidget::openAndPlayNoRecording()
 {
+    resetStatsCache();
     libvlc_media_t *media = openMedia(m_url, /*withRecording=*/false);
     if (!media) return false;
     m_player = libvlc_media_player_new_from_media(media);

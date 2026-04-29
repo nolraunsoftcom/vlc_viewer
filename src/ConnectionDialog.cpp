@@ -121,7 +121,7 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
 {
     setWindowTitle(windowTitle);
     setModal(true);
-    setMinimumWidth(400);
+    setMinimumWidth(520);
     setStyleSheet(DIALOG_STYLE);
 
     auto *mainLayout = new QVBoxLayout(this);
@@ -136,9 +136,11 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
     channelForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
 
     m_channelName = new QLineEdit(initialInfo.channelName, channelGroup);
+    m_channelName->setMinimumWidth(300);
     channelForm->addRow("채널 이름:", m_channelName);
 
     m_rtspUrl = new QLineEdit(initialInfo.rtspUrl, channelGroup);
+    m_rtspUrl->setMinimumWidth(300);
     channelForm->addRow("RTSP URL:", m_rtspUrl);
 
     mainLayout->addWidget(channelGroup);
