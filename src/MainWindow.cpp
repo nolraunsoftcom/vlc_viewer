@@ -44,16 +44,16 @@ static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
 static const int MAX_LOG_LINES = 1000;
 static const int GRID_SPACING = 1;
-static const int VIEWER_INFO_BAR_HEIGHT = 36;
+static const int VIEWER_INFO_BAR_HEIGHT = 28;
 static const int LEFT_PANEL_WIDTH = 200;
 static const int RIGHT_PANEL_WIDTH = 280;
 static const int PANEL_TOGGLE_WIDTH = 18;
 static const char *CHANNEL_DRAG_MIME = "application/x-ziilab-channel-viewer-ptr";
 static const char *VIEWER_DRAG_MIME = "application/x-ziilab-viewer-ptr";
 static const QString GRID_CELL_STYLE =
-    "QFrame#gridCell { background-color: #111; border: none; }";
+    "QFrame#gridCell { background-color: #111; border: 1px solid transparent; }";
 static const QString GRID_CELL_HIGHLIGHT_STYLE =
-    "QFrame#gridCell { background-color: #4a9eff; border: none; }";
+    "QFrame#gridCell { background-color: #111; border: 1px solid rgba(74, 158, 255, 150); }";
 
 namespace {
 
@@ -199,7 +199,7 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
         if (removeChannel(v)) {
             renderChannelTable();
             saveChannels();
-            rebuildGrid();
+            refreshGridAfterChannelSetChanged();
         }
     });
     connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
@@ -279,6 +279,7 @@ void MainWindow::renderChannelTable()
     if (!m_channelTable) return;
 
     hideChannelDropIndicator();
+    hideSelectedGridHighlight();
     m_channelTable->setUpdatesEnabled(false);
     m_channelTable->clearSelection();
     m_channelTable->setRowCount(0);
@@ -388,7 +389,7 @@ void MainWindow::setupSidebar(QWidget *parent)
         auto *viewer = viewerForChannelRow(row);
         if (!viewer) return;
 
-        selectChannelRowFromClick(row, Qt::NoModifier);
+        selectChannelRowFromClick(row, Qt::NoModifier, false);
 
         QMenu menu(this);
         menu.setStyleSheet(Style::MENU);
@@ -415,8 +416,10 @@ void MainWindow::setupSidebar(QWidget *parent)
     m_channelDropIndicator->hide();
     bodyLayout->addWidget(m_channelTable, 1);
 
-    auto *footerLayout = new QHBoxLayout();
-    footerLayout->setContentsMargins(0, 4, 0, 0);
+    auto *footer = new QWidget(body);
+    footer->setStyleSheet("QWidget { border-top: 1px solid #333; }");
+    auto *footerLayout = new QHBoxLayout(footer);
+    footerLayout->setContentsMargins(0, 6, 0, 0);
     footerLayout->setSpacing(2);
 
     auto *addBtn = new QPushButton("+", body);
@@ -435,16 +438,17 @@ void MainWindow::setupSidebar(QWidget *parent)
 
     auto *alignBtn = new QPushButton("정렬", body);
     alignBtn->setFixedHeight(26);
+    alignBtn->setFixedWidth(44);
     alignBtn->setToolTip("좌측 목록 순서대로 영상 정렬");
     alignBtn->setStyleSheet(
         "QPushButton { color: white; background-color: #444; border: 1px solid #555; font-size: 11px; }"
         "QPushButton:hover { background-color: #555; }");
     connect(alignBtn, &QPushButton::clicked, this, &MainWindow::alignGridToChannelListOrder);
 
-    footerLayout->addWidget(addBtn);
-    footerLayout->addWidget(removeBtn);
+    footerLayout->addWidget(addBtn, 1);
+    footerLayout->addWidget(removeBtn, 1);
     footerLayout->addWidget(alignBtn);
-    bodyLayout->addLayout(footerLayout);
+    bodyLayout->addWidget(footer);
 
     layout->addWidget(body, 1);
 }
@@ -539,9 +543,7 @@ void MainWindow::setLeftPanelVisible(bool visible)
     m_leftPanelVisible = visible;
     m_sidebar->setVisible(visible);
     updatePanelToggleButtons();
-    QTimer::singleShot(0, this, [this]() {
-        updateGridCellSizes();
-    });
+    scheduleGridCellSizeUpdate();
 }
 
 void MainWindow::setRightPanelVisible(bool visible)
@@ -551,9 +553,7 @@ void MainWindow::setRightPanelVisible(bool visible)
     m_rightPanelVisible = visible;
     m_rightPanel->setVisible(visible);
     updatePanelToggleButtons();
-    QTimer::singleShot(0, this, [this]() {
-        updateGridCellSizes();
-    });
+    scheduleGridCellSizeUpdate();
 }
 
 void MainWindow::updatePanelToggleButtons()
@@ -690,6 +690,8 @@ void MainWindow::appendLog(const QString &message, LogLevel level)
 
 void MainWindow::setGridColumns(int cols)
 {
+    if (m_gridCols == cols) return;
+
     m_gridCols = cols;
     saveChannels();
     rebuildGrid();
@@ -894,11 +896,11 @@ void MainWindow::addChannel()
     m_gridIndexes.insert(viewer, firstFreeGridIndex());
     viewer->play(url, name);
     addChannelToTable(viewer);
-    selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier);
+    selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier, false);
 
     appendLog(QString("Channel added: %1 (%2)").arg(name, url), LogLevel::INFO);
     saveChannels();
-    rebuildGrid();
+    refreshGridAfterChannelSetChanged();
 }
 
 void MainWindow::editChannel(VlcWidget *viewer)
@@ -1025,7 +1027,7 @@ void MainWindow::removeSelectedChannel()
 
     renderChannelTable();
     saveChannels();
-    rebuildGrid();
+    refreshGridAfterChannelSetChanged();
 }
 
 // ============================================================
@@ -1083,6 +1085,7 @@ void MainWindow::moveViewerToGridIndex(VlcWidget *viewer, int targetIndex)
     m_gridIndexes.insert(viewer, targetIndex);
 
     rebuildGrid();
+    syncSelectedGridHighlightFromChannelSelection();
     scheduleSaveChannels();
     appendLog(QString("Channel moved: %1 → grid index %2").arg(viewer->name()).arg(targetIndex + 1),
               LogLevel::DEBUG);
@@ -1125,7 +1128,9 @@ void MainWindow::alignGridToChannelListOrder()
     if (!changed) return;
 
     hideDropHighlight();
+    invalidateGridLayoutCache();
     updateGridCellSizes();
+    syncSelectedGridHighlightFromChannelSelection();
     scheduleSaveChannels();
     appendLog("Grid aligned to channel list order", LogLevel::DEBUG);
 }
@@ -1133,6 +1138,7 @@ void MainWindow::alignGridToChannelListOrder()
 void MainWindow::rebuildGrid()
 {
     hideDropHighlight();
+    invalidateGridLayoutCache();
 
     delete m_grid;
     m_grid = new QGridLayout(m_gridWidget);
@@ -1153,6 +1159,14 @@ void MainWindow::rebuildGrid()
     }
 
     updateGridCellSizes();
+}
+
+void MainWindow::refreshGridAfterChannelSetChanged()
+{
+    hideDropHighlight();
+    invalidateGridLayoutCache();
+    updateGridCellSizes();
+    syncSelectedGridHighlightFromChannelSelection();
 }
 
 bool MainWindow::startChannelDragIfNeeded(QMouseEvent *event)
@@ -1179,7 +1193,7 @@ bool MainWindow::startChannelDragIfNeeded(QMouseEvent *event)
     hideDropHighlight();
     hideChannelDropIndicator();
     if (m_channelDropCompletedRow >= 0 && m_channelDropCompletedRow < m_channelTable->rowCount()) {
-        selectChannelRowFromClick(m_channelDropCompletedRow, Qt::NoModifier);
+        selectChannelRowFromClick(m_channelDropCompletedRow, Qt::NoModifier, false);
     } else {
         m_channelTable->clearSelection();
         m_channelTable->setCurrentIndex(QModelIndex());
@@ -1187,6 +1201,7 @@ bool MainWindow::startChannelDragIfNeeded(QMouseEvent *event)
             selection->clear();
         }
         m_lastChannelClickedRow = -1;
+        hideSelectedGridHighlight();
     }
     m_channelDragRow = -1;
     m_channelDragStarted = false;
@@ -1230,7 +1245,7 @@ bool MainWindow::startViewerDragIfNeeded(QMouseEvent *event)
     return true;
 }
 
-void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers)
+void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers, bool toggleIfCurrent)
 {
     if (!m_channelTable || row < 0 || row >= m_channelTable->rowCount()) {
         if (m_channelTable) {
@@ -1238,6 +1253,7 @@ void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifi
             m_channelTable->setCurrentIndex(QModelIndex());
         }
         m_lastChannelClickedRow = -1;
+        hideSelectedGridHighlight();
         return;
     }
 
@@ -1251,6 +1267,14 @@ void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifi
     const bool range = modifiers.testFlag(Qt::ShiftModifier)
         && m_lastChannelClickedRow >= 0
         && m_lastChannelClickedRow < m_channelTable->rowCount();
+    auto selectedRowCount = [this]() {
+        int count = 0;
+        const auto ranges = m_channelTable->selectedRanges();
+        for (const auto &range : ranges) {
+            count += range.bottomRow() - range.topRow() + 1;
+        }
+        return count;
+    };
 
     if (range) {
         int from = qMin(m_lastChannelClickedRow, row);
@@ -1265,6 +1289,14 @@ void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifi
                           (selected ? QItemSelectionModel::Deselect : QItemSelectionModel::Select)
                               | QItemSelectionModel::Rows);
         m_lastChannelClickedRow = row;
+    } else if (toggleIfCurrent
+               && selection->isRowSelected(row, QModelIndex())
+               && selectedRowCount() == 1) {
+        m_channelTable->clearSelection();
+        m_channelTable->setCurrentIndex(QModelIndex());
+        m_lastChannelClickedRow = -1;
+        hideSelectedGridHighlight();
+        return;
     } else {
         QItemSelection rowSelection(index, index);
         selection->select(rowSelection,
@@ -1273,6 +1305,16 @@ void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifi
     }
 
     selection->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    m_channelTable->scrollTo(index, QAbstractItemView::EnsureVisible);
+    syncSelectedGridHighlightFromChannelSelection();
+}
+
+void MainWindow::selectChannelViewer(VlcWidget *viewer)
+{
+    int row = channelRowForViewer(viewer);
+    if (row < 0) return;
+
+    selectChannelRowFromClick(row, Qt::NoModifier, false);
 }
 
 int MainWindow::channelInsertRowForPosition(const QPoint &pos) const
@@ -1377,7 +1419,7 @@ bool MainWindow::handleChannelListDragEvent(QObject *obj, QEvent *event)
     }
 
     m_channelDropCompletedRow = targetRow;
-    selectChannelRowFromClick(targetRow, Qt::NoModifier);
+    selectChannelRowFromClick(targetRow, Qt::NoModifier, false);
     dropEvent->acceptProposedAction();
     return true;
 }
@@ -1433,11 +1475,11 @@ QFrame *MainWindow::createGridCell()
     cell->setObjectName("gridCell");
     cell->setAcceptDrops(true);
     cell->installEventFilter(this);
-    cell->setProperty("dropHighlighted", false);
+    cell->setProperty("gridHighlighted", false);
     cell->setStyleSheet(GRID_CELL_STYLE);
 
     auto *layout = new QVBoxLayout(cell);
-    layout->setContentsMargins(2, 2, 2, 2);
+    layout->setContentsMargins(1, 1, 1, 1);
     layout->setSpacing(0);
     return cell;
 }
@@ -1478,27 +1520,94 @@ void MainWindow::setGridCellHighlighted(int index, bool highlighted)
 {
     if (index < 0 || index >= m_gridCells.size()) return;
     auto *cell = m_gridCells[index];
-    if (cell->property("dropHighlighted").toBool() == highlighted) return;
+    if (cell->property("gridHighlighted").toBool() == highlighted) return;
 
-    cell->setProperty("dropHighlighted", highlighted);
+    cell->setProperty("gridHighlighted", highlighted);
     cell->setStyleSheet(highlighted ? GRID_CELL_HIGHLIGHT_STYLE : GRID_CELL_STYLE);
+}
+
+bool MainWindow::isGridCellHighlighted(int index) const
+{
+    return index >= 0
+        && (index == m_dropHighlightIndex || m_selectedGridHighlightIndexes.contains(index));
+}
+
+void MainWindow::refreshGridCellHighlight(int index)
+{
+    setGridCellHighlighted(index, isGridCellHighlighted(index));
 }
 
 void MainWindow::showDropHighlight(int index)
 {
     if (index < 0 || index == m_dropHighlightIndex) return;
 
-    setGridCellHighlighted(m_dropHighlightIndex, false);
+    int previousIndex = m_dropHighlightIndex;
     m_dropHighlightIndex = index;
-    setGridCellHighlighted(m_dropHighlightIndex, true);
+    refreshGridCellHighlight(previousIndex);
+    refreshGridCellHighlight(m_dropHighlightIndex);
 }
 
 void MainWindow::hideDropHighlight()
 {
     if (m_dropHighlightIndex < 0) return;
 
-    setGridCellHighlighted(m_dropHighlightIndex, false);
+    int previousIndex = m_dropHighlightIndex;
     m_dropHighlightIndex = -1;
+    refreshGridCellHighlight(previousIndex);
+}
+
+void MainWindow::setSelectedGridHighlights(const QSet<int> &indexes)
+{
+    if (m_selectedGridHighlightIndexes == indexes) return;
+
+    QSet<int> affectedIndexes = m_selectedGridHighlightIndexes;
+    affectedIndexes.unite(indexes);
+    m_selectedGridHighlightIndexes = indexes;
+
+    for (int index : affectedIndexes) {
+        refreshGridCellHighlight(index);
+    }
+}
+
+void MainWindow::hideSelectedGridHighlight()
+{
+    if (m_selectedGridHighlightIndexes.isEmpty()) return;
+
+    QSet<int> previousIndexes = m_selectedGridHighlightIndexes;
+    m_selectedGridHighlightIndexes.clear();
+    for (int index : previousIndexes) {
+        refreshGridCellHighlight(index);
+    }
+}
+
+void MainWindow::syncSelectedGridHighlightFromChannelSelection()
+{
+    if (!m_channelTable) {
+        hideSelectedGridHighlight();
+        return;
+    }
+
+    auto *selection = m_channelTable->selectionModel();
+    if (!selection) {
+        hideSelectedGridHighlight();
+        return;
+    }
+
+    QSet<int> gridIndexes;
+    const auto ranges = m_channelTable->selectedRanges();
+    for (const auto &range : ranges) {
+        for (int row = range.topRow(); row <= range.bottomRow(); ++row) {
+            auto *viewer = viewerForChannelRow(row);
+            if (!viewer) continue;
+
+            int gridIndex = m_gridIndexes.value(viewer, -1);
+            if (gridIndex >= 0) {
+                gridIndexes.insert(gridIndex);
+            }
+        }
+    }
+
+    setSelectedGridHighlights(gridIndexes);
 }
 
 bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
@@ -1569,7 +1678,19 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
             return true;
         }
 
-        if (event->type() == QEvent::MouseButtonPress) {
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                int row = m_channelTable->rowAt(mouseEvent->position().toPoint().y());
+                if (auto *viewer = viewerForChannelRow(row)) {
+                    m_channelDragRow = -1;
+                    m_channelDragStarted = false;
+                    selectChannelRowFromClick(row, Qt::NoModifier, false);
+                    openFullscreenTab(viewer);
+                    return true;
+                }
+            }
+        } else if (event->type() == QEvent::MouseButtonPress) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
                 m_channelDragStartPos = mouseEvent->position().toPoint();
@@ -1606,10 +1727,20 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     const bool isViewerMouseEvent =
         event->type() == QEvent::MouseButtonPress
         || event->type() == QEvent::MouseMove
-        || event->type() == QEvent::MouseButtonRelease;
+        || event->type() == QEvent::MouseButtonRelease
+        || event->type() == QEvent::MouseButtonDblClick;
     if (isViewerMouseEvent) {
         auto *viewer = viewerForDragObject(obj);
-        if (viewer && event->type() == QEvent::MouseButtonPress) {
+        if (viewer && event->type() == QEvent::MouseButtonDblClick) {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::LeftButton) {
+                m_viewerDragSource = nullptr;
+                m_viewerDragStarted = false;
+                selectChannelViewer(viewer);
+                openFullscreenTab(viewer);
+                return true;
+            }
+        } else if (viewer && event->type() == QEvent::MouseButtonPress) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
                 m_viewerDragSource = viewer;
@@ -1625,6 +1756,9 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
         } else if (viewer && event->type() == QEvent::MouseButtonRelease) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (mouseEvent->button() == Qt::LeftButton && m_viewerDragSource == viewer) {
+                if (!m_viewerDragStarted) {
+                    selectChannelViewer(viewer);
+                }
                 m_viewerDragSource = nullptr;
                 m_viewerDragStarted = false;
             }
@@ -1639,15 +1773,43 @@ bool MainWindow::eventFilter(QObject *obj, QEvent *event)
     const bool isViewportResize = m_gridScrollArea
         && obj == m_gridScrollArea->viewport()
         && event->type() == QEvent::Resize;
-    if (isGridResize || isViewportResize) {
-        updateGridCellSizes();
+    if (isViewportResize) {
+        scheduleGridCellSizeUpdate();
+    } else if (isGridResize) {
+        // m_gridWidget height changes are usually caused by updateGridCellSizes().
+        // The viewport resize path is the source of truth for real layout changes.
+        return QMainWindow::eventFilter(obj, event);
     }
     return QMainWindow::eventFilter(obj, event);
 }
 
+void MainWindow::scheduleGridCellSizeUpdate()
+{
+    if (m_gridLayoutUpdatePending) return;
+
+    m_gridLayoutUpdatePending = true;
+    QTimer::singleShot(0, this, [this]() {
+        m_gridLayoutUpdatePending = false;
+        updateGridCellSizes();
+    });
+}
+
+void MainWindow::invalidateGridLayoutCache()
+{
+    m_gridLayoutDirty = true;
+    m_cachedGridCols = -1;
+    m_cachedGridWidth = -1;
+    m_cachedGridViewportHeight = -1;
+    m_cachedGridMaxIndex = -2;
+    m_cachedGridRows = -1;
+    m_cachedGridTotalCells = -1;
+    m_cachedGridCellWidth = -1;
+    m_cachedGridCellHeight = -1;
+}
+
 void MainWindow::updateGridCellSizes()
 {
-    if (!m_grid) return;
+    if (!m_grid || !m_gridWidget) return;
 
     int cols = effectiveGridCols();
     int gridWidth = m_gridScrollArea ? m_gridScrollArea->viewport()->width() : m_gridWidget->width();
@@ -1659,12 +1821,26 @@ void MainWindow::updateGridCellSizes()
         viewportHeight = m_gridWidget->parentWidget() ? m_gridWidget->parentWidget()->height() : m_gridWidget->height();
     }
 
+    const int maxGridIndex = maxAssignedGridIndex();
     int cellWidth = qMax(1, (gridWidth - (cols - 1) * GRID_SPACING) / cols);
     int cellHeight = cellWidth * 3 / 4 + VIEWER_INFO_BAR_HEIGHT;
-    int requiredRows = qMax(1, (maxAssignedGridIndex() + cols) / cols);
+    int requiredRows = qMax(1, (maxGridIndex + cols) / cols);
     int rowsForViewport = qMax(1, (viewportHeight + GRID_SPACING + cellHeight) / (cellHeight + GRID_SPACING));
     int rows = qMax(requiredRows, rowsForViewport);
     int totalCells = rows * cols;
+
+    const bool layoutUnchanged =
+        !m_gridLayoutDirty
+        && m_cachedGridCols == cols
+        && m_cachedGridWidth == gridWidth
+        && m_cachedGridViewportHeight == viewportHeight
+        && m_cachedGridMaxIndex == maxGridIndex
+        && m_cachedGridRows == rows
+        && m_cachedGridTotalCells == totalCells
+        && m_gridCells.size() == totalCells
+        && m_cachedGridCellWidth == cellWidth
+        && m_cachedGridCellHeight == cellHeight;
+    if (layoutUnchanged) return;
 
     QHash<int, VlcWidget *> occupied;
     for (auto *viewer : m_viewers) {
@@ -1676,16 +1852,33 @@ void MainWindow::updateGridCellSizes()
 
     ensureGridCellCount(totalCells);
 
+    const QSize viewerSize(qMax(1, cellWidth - 4), qMax(1, cellHeight - 4));
     for (auto *viewer : m_viewers) {
-        viewer->setFixedSize(qMax(1, cellWidth - 4), qMax(1, cellHeight - 4));
+        if (viewer->minimumSize() != viewerSize || viewer->maximumSize() != viewerSize) {
+            viewer->setFixedSize(viewerSize);
+        }
     }
 
+    const QSize cellSize(cellWidth, cellHeight);
     for (int i = 0; i < m_gridCells.size(); ++i) {
         auto *cell = m_gridCells[i];
-        cell->setProperty("gridIndex", i);
-        cell->setFixedSize(cellWidth, cellHeight);
-        m_grid->addWidget(cell, i / cols, i % cols);
-        setGridCellHighlighted(i, i == m_dropHighlightIndex);
+        bool indexOk = false;
+        const int currentIndex = cell->property("gridIndex").toInt(&indexOk);
+        if (!indexOk || currentIndex != i) {
+            cell->setProperty("gridIndex", i);
+        }
+        if (cell->minimumSize() != cellSize || cell->maximumSize() != cellSize) {
+            cell->setFixedSize(cellSize);
+        }
+
+        const int row = i / cols;
+        const int col = i % cols;
+        auto *existingItem = m_grid->itemAtPosition(row, col);
+        if (!existingItem || existingItem->widget() != cell) {
+            m_grid->addWidget(cell, row, col);
+        }
+
+        refreshGridCellHighlight(i);
 
         auto *layout = qobject_cast<QVBoxLayout *>(cell->layout());
         if (!layout) continue;
@@ -1707,16 +1900,31 @@ void MainWindow::updateGridCellSizes()
             clearGridCell(cell);
             auto *label = new QLabel("No Stream", cell);
             label->setAlignment(Qt::AlignCenter);
-            label->setStyleSheet("color: #444; font-size: 13px; background-color: #111;");
+            label->setStyleSheet("color: #444; font-size: 13px; background: transparent;");
             label->setAcceptDrops(true);
             label->installEventFilter(this);
             layout->addWidget(label);
         }
-        cell->show();
+
+        if (!cell->isVisible()) {
+            cell->show();
+        }
     }
 
     int gridHeight = rows * cellHeight + (rows - 1) * GRID_SPACING;
-    m_gridWidget->setFixedHeight(gridHeight);
+    if (m_gridWidget->minimumHeight() != gridHeight || m_gridWidget->maximumHeight() != gridHeight) {
+        m_gridWidget->setFixedHeight(gridHeight);
+    }
+
+    m_cachedGridCols = cols;
+    m_cachedGridWidth = gridWidth;
+    m_cachedGridViewportHeight = viewportHeight;
+    m_cachedGridMaxIndex = maxGridIndex;
+    m_cachedGridRows = rows;
+    m_cachedGridTotalCells = totalCells;
+    m_cachedGridCellWidth = cellWidth;
+    m_cachedGridCellHeight = cellHeight;
+    m_gridLayoutDirty = false;
 }
 
 // ============================================================

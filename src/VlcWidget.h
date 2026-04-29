@@ -87,8 +87,6 @@ private:
     QWidget *m_videoSurface = nullptr;
     QLabel *m_placeholder = nullptr;
     QLabel *m_nameLabel = nullptr;
-    QLabel *m_infoLabel = nullptr;
-    QLabel *m_timeLabel = nullptr;
     QLabel *m_recBadge = nullptr;
     QPushButton *m_snapshotBtn = nullptr;
     QPushButton *m_recordBtn = nullptr;

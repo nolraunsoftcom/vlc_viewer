@@ -6,6 +6,7 @@
 #include <QHash>
 #include <QLabel>
 #include <QPoint>
+#include <QSet>
 #include <QTimer>
 #include <QTableWidget>
 #include <QTabWidget>
@@ -87,6 +88,17 @@ private:
     QWidget *m_gridPage = nullptr;
     QScrollArea *m_gridScrollArea = nullptr;
     int m_dropHighlightIndex = -1;
+    QSet<int> m_selectedGridHighlightIndexes;
+    bool m_gridLayoutUpdatePending = false;
+    bool m_gridLayoutDirty = true;
+    int m_cachedGridCols = -1;
+    int m_cachedGridWidth = -1;
+    int m_cachedGridViewportHeight = -1;
+    int m_cachedGridMaxIndex = -2;
+    int m_cachedGridRows = -1;
+    int m_cachedGridTotalCells = -1;
+    int m_cachedGridCellWidth = -1;
+    int m_cachedGridCellHeight = -1;
 
     // 상태 바
     StatusBar *m_statusBar = nullptr;
@@ -101,7 +113,10 @@ private:
     int effectiveGridCols() const;
 
     void rebuildGrid();
+    void refreshGridAfterChannelSetChanged();
     void updateGridCellSizes();
+    void scheduleGridCellSizeUpdate();
+    void invalidateGridLayoutCache();
     QPushButton *createPanelToggleButton(QWidget *parent);
     void setLeftPanelVisible(bool visible);
     void setRightPanelVisible(bool visible);
@@ -117,7 +132,8 @@ private:
     bool startChannelDragIfNeeded(QMouseEvent *event);
     bool startViewerDragIfNeeded(QMouseEvent *event);
     VlcWidget *viewerForDragObject(QObject *obj) const;
-    void selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers);
+    void selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers, bool toggleIfCurrent = true);
+    void selectChannelViewer(VlcWidget *viewer);
     bool handleChannelListDragEvent(QObject *obj, QEvent *event);
     int channelInsertRowForPosition(const QPoint &pos) const;
     void showChannelDropIndicator(int insertRow);
@@ -129,8 +145,13 @@ private:
     void ensureGridCellCount(int count);
     void clearGridCell(QFrame *cell);
     void setGridCellHighlighted(int index, bool highlighted);
+    bool isGridCellHighlighted(int index) const;
+    void refreshGridCellHighlight(int index);
     void showDropHighlight(int index);
     void hideDropHighlight();
+    void setSelectedGridHighlights(const QSet<int> &indexes);
+    void hideSelectedGridHighlight();
+    void syncSelectedGridHighlightFromChannelSelection();
     bool eventFilter(QObject *obj, QEvent *event) override;
     void setupSidebar(QWidget *parent);
     void setupRightPanel(QWidget *parent);

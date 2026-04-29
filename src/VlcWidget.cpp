@@ -47,19 +47,13 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     : QWidget(parent)
     , m_vlcInstance(vlcInstance)
 {
-    // 상단 정보 바 (2줄)
+    // 상단 정보 바
     auto *infoBar = new QWidget(this);
     infoBar->setStyleSheet("background-color: rgba(0,0,0,180);");
-    infoBar->setFixedHeight(36);
+    infoBar->setFixedHeight(28);
 
     m_nameLabel = new QLabel(this);
     m_nameLabel->setStyleSheet("color: white; font-size: 11px; font-weight: bold;");
-
-    m_timeLabel = new QLabel(this);
-    m_timeLabel->setStyleSheet("color: #ccc; font-size: 10px;");
-
-    m_infoLabel = new QLabel(this);
-    m_infoLabel->setStyleSheet("color: #888; font-size: 10px;");
 
     m_recBadge = new QLabel(this);
     m_recBadge->setStyleSheet(Style::REC_BADGE_ACTIVE);
@@ -93,14 +87,11 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     row1->addWidget(m_recBadge);
     row1->addWidget(m_snapshotBtn);
     row1->addWidget(m_recordBtn);
-    row1->addSpacing(4);
-    row1->addWidget(m_timeLabel);
 
     auto *barLayout = new QVBoxLayout(infoBar);
-    barLayout->setContentsMargins(6, 2, 6, 2);
+    barLayout->setContentsMargins(6, 4, 6, 4);
     barLayout->setSpacing(0);
     barLayout->addLayout(row1);
-    barLayout->addWidget(m_infoLabel);
 
     // 비디오가 그려질 표면
     m_videoSurface = new QWidget(this);
@@ -120,8 +111,6 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     m_videoSurface->hide();
     m_nameLabel->hide();
-    m_infoLabel->hide();
-    m_timeLabel->hide();
     m_placeholder->show();
 
     updateRecordUi();
@@ -190,10 +179,7 @@ void VlcWidget::play(const QString &url, const QString &name)
     m_videoSurface->show();
 
     m_nameLabel->setText(name);
-    m_infoLabel->setText(url);
     m_nameLabel->show();
-    m_infoLabel->show();
-    m_timeLabel->show();
 
     setupEvents();
     libvlc_media_player_play(m_player);
@@ -208,7 +194,6 @@ void VlcWidget::setChannelInfo(const QString &name, const QString &url)
     m_name = name;
     m_url = url;
     m_nameLabel->setText(name);
-    m_infoLabel->setText(url);
     updateRecordUi();
 }
 
@@ -428,7 +413,7 @@ void VlcWidget::reconnect()
 
 void VlcWidget::updateTime(const QString &timeStr)
 {
-    m_timeLabel->setText(timeStr);
+    Q_UNUSED(timeStr);
     updateRecordUi();
 }
 
@@ -450,8 +435,6 @@ void VlcWidget::stop()
     m_name.clear();
     m_videoSurface->hide();
     m_nameLabel->hide();
-    m_infoLabel->hide();
-    m_timeLabel->hide();
     m_placeholder->show();
 
     updateRecordUi();
