@@ -48,12 +48,34 @@ static const int VIEWER_INFO_BAR_HEIGHT = 36;
 static const int LEFT_PANEL_WIDTH = 200;
 static const int RIGHT_PANEL_WIDTH = 280;
 static const int PANEL_TOGGLE_WIDTH = 18;
-static const char *CHANNEL_DRAG_MIME = "application/x-ziilab-channel-row";
+static const char *CHANNEL_DRAG_MIME = "application/x-ziilab-channel-viewer-ptr";
 static const char *VIEWER_DRAG_MIME = "application/x-ziilab-viewer-ptr";
 static const QString GRID_CELL_STYLE =
     "QFrame#gridCell { background-color: #111; border: none; }";
 static const QString GRID_CELL_HIGHLIGHT_STYLE =
     "QFrame#gridCell { background-color: #4a9eff; border: none; }";
+
+namespace {
+
+void applyChannelStatusLabel(QLabel *statusLabel, VlcWidget::Status status)
+{
+    if (!statusLabel) return;
+
+    QString color;
+    switch (status) {
+        case VlcWidget::Status::Connected:    color = "#4a4"; break;
+        case VlcWidget::Status::Connecting:   color = "#888"; break;
+        case VlcWidget::Status::Reconnecting: color = "#e8a838"; break;
+        case VlcWidget::Status::Disconnected: color = "#e85050"; break;
+        case VlcWidget::Status::Failed:       color = "#e85050"; break;
+        default:                              color = "#888"; break;
+    }
+
+    statusLabel->setText(VlcWidget::statusText(status));
+    statusLabel->setStyleSheet(QString("color: %1; font-size: 10px; background: transparent;").arg(color));
+}
+
+} // namespace
 
 MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     : QMainWindow(parent)
@@ -171,29 +193,11 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
     connect(viewer, &VlcWidget::doubleClicked, this, &MainWindow::openFullscreenTab);
     connect(viewer, &VlcWidget::requestFullscreen, this, &MainWindow::openFullscreenTab);
     connect(viewer, &VlcWidget::requestEdit, this, [this](VlcWidget *v) {
-        int idx = m_viewers.indexOf(v);
-        if (idx >= 0) editChannel(idx);
+        editChannel(v);
     });
     connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
-        int idx = m_viewers.indexOf(v);
-        if (idx >= 0) {
-            QString chName = v->name();
-
-            // 해당 그리드 뷰어를 소스로 하는 orphan 전체화면 탭 정리
-            for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                auto *tabWidget = m_videoTabs->widget(i);
-                if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
-                    fullViewer && fullViewer->sourceViewer() == v) {
-                    closeVideoTab(i);
-                }
-            }
-
-            m_gridIndexes.remove(v);
-            m_viewers.removeAt(idx);
-            v->stop();
-            v->deleteLater();
-            m_channelTable->removeRow(idx);
-            appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
+        if (removeChannel(v)) {
+            renderChannelTable();
             saveChannels();
             rebuildGrid();
         }
@@ -221,33 +225,22 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
                 .arg(w->name(), path, reason), LogLevel::ERROR);
         });
     connect(viewer, &VlcWidget::statusChanged, this, [this](VlcWidget *v, VlcWidget::Status s) {
-        int idx = m_viewers.indexOf(v);
-        if (idx < 0 || idx >= m_channelTable->rowCount()) return;
-        auto *cell = m_channelTable->cellWidget(idx, 0);
+        int row = channelRowForViewer(v);
+        if (row < 0 || row >= m_channelTable->rowCount()) return;
+        auto *cell = m_channelTable->cellWidget(row, 0);
         if (!cell) return;
         auto *statusLabel = cell->findChild<QLabel *>("statusLabel");
-        if (!statusLabel) return;
-
-        QString text = VlcWidget::statusText(s);
-        QString color;
-        switch (s) {
-            case VlcWidget::Status::Connected:    color = "#4a4"; break;
-            case VlcWidget::Status::Connecting:   color = "#888"; break;
-            case VlcWidget::Status::Reconnecting: color = "#e8a838"; break;
-            case VlcWidget::Status::Disconnected: color = "#e85050"; break;
-            case VlcWidget::Status::Failed:       color = "#e85050"; break;
-            default:                              color = "#888"; break;
-        }
-        statusLabel->setText(text);
-        statusLabel->setStyleSheet(QString("color: %1; font-size: 10px; background: transparent;").arg(color));
+        applyChannelStatusLabel(statusLabel, s);
     });
 
     m_viewers.append(viewer);
     return viewer;
 }
 
-void MainWindow::addChannelToTable(const QString &name, const QString &url)
+void MainWindow::addChannelToTable(VlcWidget *viewer)
 {
+    if (!m_channelTable || !viewer) return;
+
     int row = m_channelTable->rowCount();
     m_channelTable->insertRow(row);
 
@@ -259,17 +252,17 @@ void MainWindow::addChannelToTable(const QString &name, const QString &url)
 
     auto *topRow = new QHBoxLayout();
     topRow->setContentsMargins(0, 0, 0, 0);
-    auto *nameLabel = new QLabel(name, cellWidget);
+    auto *nameLabel = new QLabel(viewer->name(), cellWidget);
     nameLabel->setObjectName("nameLabel");
     nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
     auto *statusLabel = new QLabel("대기", cellWidget);
     statusLabel->setObjectName("statusLabel");
-    statusLabel->setStyleSheet("color: #888; font-size: 10px; background: transparent;");
+    applyChannelStatusLabel(statusLabel, viewer->status());
     topRow->addWidget(nameLabel);
     topRow->addStretch();
     topRow->addWidget(statusLabel);
 
-    auto *urlLabel = new QLabel(url, cellWidget);
+    auto *urlLabel = new QLabel(viewer->url(), cellWidget);
     urlLabel->setObjectName("urlLabel");
     urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
     urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
@@ -279,6 +272,53 @@ void MainWindow::addChannelToTable(const QString &name, const QString &url)
 
     m_channelTable->setCellWidget(row, 0, cellWidget);
     m_channelTable->setRowHeight(row, 46);
+}
+
+void MainWindow::renderChannelTable()
+{
+    if (!m_channelTable) return;
+
+    hideChannelDropIndicator();
+    m_channelTable->setUpdatesEnabled(false);
+    m_channelTable->clearSelection();
+    m_channelTable->setRowCount(0);
+    for (auto *viewer : m_channelListOrder) {
+        if (m_viewers.contains(viewer)) {
+            addChannelToTable(viewer);
+        }
+    }
+    m_channelTable->setUpdatesEnabled(true);
+}
+
+VlcWidget *MainWindow::viewerForChannelRow(int row) const
+{
+    if (row < 0 || row >= m_channelListOrder.size()) return nullptr;
+    auto *viewer = m_channelListOrder[row];
+    return m_viewers.contains(viewer) ? viewer : nullptr;
+}
+
+int MainWindow::channelRowForViewer(VlcWidget *viewer) const
+{
+    if (!viewer) return -1;
+    return m_channelListOrder.indexOf(viewer);
+}
+
+VlcWidget *MainWindow::viewerFromDragMime(const QMimeData *mimeData, bool allowGridViewerMime) const
+{
+    if (!mimeData) return nullptr;
+
+    bool ok = false;
+    quintptr ptr = 0;
+    if (mimeData->hasFormat(CHANNEL_DRAG_MIME)) {
+        ptr = mimeData->data(CHANNEL_DRAG_MIME).toULongLong(&ok);
+    } else if (allowGridViewerMime && mimeData->hasFormat(VIEWER_DRAG_MIME)) {
+        ptr = mimeData->data(VIEWER_DRAG_MIME).toULongLong(&ok);
+    }
+
+    if (!ok || ptr == 0) return nullptr;
+
+    auto *viewer = reinterpret_cast<VlcWidget *>(ptr);
+    return m_viewers.contains(viewer) ? viewer : nullptr;
 }
 
 int MainWindow::effectiveGridCols() const
@@ -323,6 +363,9 @@ void MainWindow::setupSidebar(QWidget *parent)
     m_channelTable->setSelectionMode(QAbstractItemView::ExtendedSelection);
     m_channelTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_channelTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_channelTable->setDropIndicatorShown(false);
+    m_channelTable->setAcceptDrops(true);
+    m_channelTable->viewport()->setAcceptDrops(true);
     m_channelTable->viewport()->installEventFilter(this);
     m_channelTable->verticalHeader()->setVisible(false);
     m_channelTable->horizontalHeader()->setVisible(false);
@@ -334,16 +377,18 @@ void MainWindow::setupSidebar(QWidget *parent)
         "QTableWidget::item { background-color: #1a1a1a; }"
         "QTableWidget::item:selected { background-color: #2a3a5a; }");
     connect(m_channelTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
-        if (row >= 0 && row < m_viewers.size()) {
-            openFullscreenTab(m_viewers[row]);
+        if (auto *viewer = viewerForChannelRow(row)) {
+            openFullscreenTab(viewer);
         }
     });
     m_channelTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_channelTable, &QTableWidget::customContextMenuRequested, this, [this](const QPoint &pos) {
         int row = m_channelTable->rowAt(pos.y());
         if (row < 0) return;
+        auto *viewer = viewerForChannelRow(row);
+        if (!viewer) return;
 
-        m_channelTable->selectRow(row);
+        selectChannelRowFromClick(row, Qt::NoModifier);
 
         QMenu menu(this);
         menu.setStyleSheet(Style::MENU);
@@ -355,14 +400,19 @@ void MainWindow::setupSidebar(QWidget *parent)
         auto *selected = menu.exec(m_channelTable->viewport()->mapToGlobal(pos));
         if (!selected) return;
 
-        if (selected == fullscreenAction && row < m_viewers.size()) {
-            openFullscreenTab(m_viewers[row]);
+        if (selected == fullscreenAction) {
+            openFullscreenTab(viewer);
         } else if (selected == editAction) {
-            editChannel(row);
+            editChannel(viewer);
         } else if (selected == removeAction) {
             removeSelectedChannel();
         }
     });
+    m_channelDropIndicator = new QFrame(m_channelTable->viewport());
+    m_channelDropIndicator->setStyleSheet("background-color: #4a9eff; border: none;");
+    m_channelDropIndicator->setFixedHeight(2);
+    m_channelDropIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_channelDropIndicator->hide();
     bodyLayout->addWidget(m_channelTable, 1);
 
     auto *footerLayout = new QHBoxLayout();
@@ -383,8 +433,17 @@ void MainWindow::setupSidebar(QWidget *parent)
         "QPushButton:hover { background-color: #555; }");
     connect(removeBtn, &QPushButton::clicked, this, &MainWindow::removeSelectedChannel);
 
+    auto *alignBtn = new QPushButton("정렬", body);
+    alignBtn->setFixedHeight(26);
+    alignBtn->setToolTip("좌측 목록 순서대로 영상 정렬");
+    alignBtn->setStyleSheet(
+        "QPushButton { color: white; background-color: #444; border: 1px solid #555; font-size: 11px; }"
+        "QPushButton:hover { background-color: #555; }");
+    connect(alignBtn, &QPushButton::clicked, this, &MainWindow::alignGridToChannelListOrder);
+
     footerLayout->addWidget(addBtn);
     footerLayout->addWidget(removeBtn);
+    footerLayout->addWidget(alignBtn);
     bodyLayout->addLayout(footerLayout);
 
     layout->addWidget(body, 1);
@@ -421,6 +480,7 @@ void MainWindow::setupVideoArea(QWidget *parent)
 
     m_gridScrollArea = new QScrollArea(m_gridPage);
     m_gridScrollArea->setWidgetResizable(true);
+    m_gridScrollArea->viewport()->setAcceptDrops(true);
     m_gridScrollArea->setFrameShape(QFrame::NoFrame);
     m_gridScrollArea->setStyleSheet("QScrollArea { background-color: black; border: none; }");
 
@@ -668,8 +728,7 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         appendLog(msg, static_cast<LogLevel>(level));
     });
     connect(fullViewer, &VlcWidget::requestEdit, this, [this](VlcWidget *v) {
-        int idx = m_viewers.indexOf(v);
-        if (idx >= 0) editChannel(idx);
+        editChannel(v);
     });
     fullViewer->play(viewer->url(), viewer->name());
 
@@ -736,7 +795,17 @@ QString MainWindow::channelsFilePath() const
 void MainWindow::saveChannels()
 {
     QJsonArray arr;
+
+    QVector<VlcWidget *> ordered = m_channelListOrder;
     for (auto *viewer : m_viewers) {
+        if (!ordered.contains(viewer)) {
+            ordered.append(viewer);
+        }
+    }
+
+    for (auto *viewer : ordered) {
+        if (!m_viewers.contains(viewer)) continue;
+
         QJsonObject obj;
         obj["name"] = viewer->name();
         obj["url"] = viewer->url();
@@ -799,8 +868,9 @@ void MainWindow::loadChannels()
             gridIndex = firstFreeGridIndex();
         }
         m_gridIndexes.insert(viewer, gridIndex);
-        addChannelToTable(name, url);
+        m_channelListOrder.append(viewer);
         viewer->play(url, name);
+        addChannelToTable(viewer);
         appendLog(QString("Channel loaded: %1").arg(name), LogLevel::DEBUG);
     }
 
@@ -820,21 +890,21 @@ void MainWindow::addChannel()
     const QString url  = info->rtspUrl;
 
     auto *viewer = createViewer(name, url, info->autoReconnect);
+    m_channelListOrder.append(viewer);
     m_gridIndexes.insert(viewer, firstFreeGridIndex());
-    addChannelToTable(name, url);
     viewer->play(url, name);
-    m_channelTable->selectRow(m_channelTable->rowCount() - 1);
+    addChannelToTable(viewer);
+    selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier);
 
     appendLog(QString("Channel added: %1 (%2)").arg(name, url), LogLevel::INFO);
     saveChannels();
     rebuildGrid();
 }
 
-void MainWindow::editChannel(int row)
+void MainWindow::editChannel(VlcWidget *viewer)
 {
-    if (row < 0 || row >= m_viewers.size()) return;
+    if (!viewer || !m_viewers.contains(viewer)) return;
 
-    auto *viewer = m_viewers[row];
     const ConnectionInfo current{
         viewer->name(),
         viewer->url(),
@@ -876,25 +946,53 @@ void MainWindow::editChannel(int row)
         }
     }
 
-    updateChannelTableRow(row, name, url);
+    updateChannelTableRow(viewer);
     saveChannels();
 
     appendLog(QString("Channel updated: %1 (%2)").arg(name, url), LogLevel::INFO);
 }
 
-void MainWindow::updateChannelTableRow(int row, const QString &name, const QString &url)
+void MainWindow::updateChannelTableRow(VlcWidget *viewer)
 {
+    int row = channelRowForViewer(viewer);
     if (row < 0 || row >= m_channelTable->rowCount()) return;
 
     auto *cell = m_channelTable->cellWidget(row, 0);
     if (!cell) return;
 
     if (auto *nameLabel = cell->findChild<QLabel *>("nameLabel")) {
-        nameLabel->setText(name);
+        nameLabel->setText(viewer->name());
     }
     if (auto *urlLabel = cell->findChild<QLabel *>("urlLabel")) {
-        urlLabel->setText(url);
+        urlLabel->setText(viewer->url());
     }
+    if (auto *statusLabel = cell->findChild<QLabel *>("statusLabel")) {
+        applyChannelStatusLabel(statusLabel, viewer->status());
+    }
+}
+
+bool MainWindow::removeChannel(VlcWidget *viewer)
+{
+    if (!viewer || !m_viewers.contains(viewer)) return false;
+
+    QString chName = viewer->name();
+
+    // 해당 그리드 뷰어를 소스로 하는 orphan 전체화면 탭 정리
+    for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
+        auto *tabWidget = m_videoTabs->widget(i);
+        if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
+            fullViewer && fullViewer->sourceViewer() == viewer) {
+            closeVideoTab(i);
+        }
+    }
+
+    m_gridIndexes.remove(viewer);
+    m_channelListOrder.removeOne(viewer);
+    m_viewers.removeOne(viewer);
+    viewer->stop();
+    viewer->deleteLater();
+    appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
+    return true;
 }
 
 void MainWindow::removeSelectedChannel()
@@ -910,29 +1008,22 @@ void MainWindow::removeSelectedChannel()
     }
     std::sort(rows.begin(), rows.end(), std::greater<int>());
 
+    QVector<VlcWidget *> selectedViewers;
     for (int row : rows) {
-        if (row >= 0 && row < m_viewers.size()) {
-            auto *viewer = m_viewers[row];
-            QString chName = viewer->name();
-
-            // orphan 전체화면 탭 정리
-            for (int i = m_videoTabs->count() - 1; i >= 1; --i) {
-                auto *tabWidget = m_videoTabs->widget(i);
-                if (auto *fullViewer = qobject_cast<VlcWidget *>(tabWidget);
-                    fullViewer && fullViewer->sourceViewer() == viewer) {
-                    closeVideoTab(i);
-                }
+        if (auto *viewer = viewerForChannelRow(row)) {
+            if (!selectedViewers.contains(viewer)) {
+                selectedViewers.append(viewer);
             }
-
-            m_gridIndexes.remove(viewer);
-            m_viewers.removeAt(row);
-            viewer->stop();
-            viewer->deleteLater();
-            m_channelTable->removeRow(row);
-            appendLog(QString("Channel removed: %1").arg(chName), LogLevel::WARN);
         }
     }
 
+    bool removed = false;
+    for (auto *viewer : selectedViewers) {
+        removed = removeChannel(viewer) || removed;
+    }
+    if (!removed) return;
+
+    renderChannelTable();
     saveChannels();
     rebuildGrid();
 }
@@ -997,6 +1088,48 @@ void MainWindow::moveViewerToGridIndex(VlcWidget *viewer, int targetIndex)
               LogLevel::DEBUG);
 }
 
+void MainWindow::alignGridToChannelListOrder()
+{
+    if (m_viewers.isEmpty()) return;
+
+    QSet<VlcWidget *> validViewers;
+    validViewers.reserve(m_viewers.size());
+    for (auto *viewer : m_viewers) {
+        if (viewer) validViewers.insert(viewer);
+    }
+
+    QSet<VlcWidget *> assigned;
+    assigned.reserve(m_viewers.size());
+
+    int index = 0;
+    bool changed = false;
+    auto assignIndex = [&](VlcWidget *viewer) {
+        if (!viewer || !validViewers.contains(viewer) || assigned.contains(viewer)) return;
+
+        if (m_gridIndexes.value(viewer, -1) != index) {
+            m_gridIndexes.insert(viewer, index);
+            changed = true;
+        }
+        viewer->setProperty("gridIndex", index);
+        assigned.insert(viewer);
+        ++index;
+    };
+
+    for (auto *viewer : m_channelListOrder) {
+        assignIndex(viewer);
+    }
+    for (auto *viewer : m_viewers) {
+        assignIndex(viewer);
+    }
+
+    if (!changed) return;
+
+    hideDropHighlight();
+    updateGridCellSizes();
+    scheduleSaveChannels();
+    appendLog("Grid aligned to channel list order", LogLevel::DEBUG);
+}
+
 void MainWindow::rebuildGrid()
 {
     hideDropHighlight();
@@ -1030,24 +1163,34 @@ bool MainWindow::startChannelDragIfNeeded(QMouseEvent *event)
         < QApplication::startDragDistance()) {
         return false;
     }
-    if (m_channelDragRow >= m_viewers.size()) return false;
+    auto *viewer = viewerForChannelRow(m_channelDragRow);
+    if (!viewer) return false;
 
     m_channelDragStarted = true;
+    m_channelDropCompletedRow = -1;
     auto *drag = new QDrag(m_channelTable);
     auto *mimeData = new QMimeData();
-    mimeData->setData(CHANNEL_DRAG_MIME, QByteArray::number(m_channelDragRow));
-    mimeData->setText(m_viewers[m_channelDragRow]->name());
+    quintptr ptr = reinterpret_cast<quintptr>(viewer);
+    mimeData->setData(CHANNEL_DRAG_MIME, QByteArray::number(ptr));
+    mimeData->setText(viewer->name());
     drag->setMimeData(mimeData);
 
     drag->exec(Qt::MoveAction);
     hideDropHighlight();
-    m_channelTable->clearSelection();
-    m_channelTable->setCurrentIndex(QModelIndex());
-    if (auto *selection = m_channelTable->selectionModel()) {
-        selection->clear();
+    hideChannelDropIndicator();
+    if (m_channelDropCompletedRow >= 0 && m_channelDropCompletedRow < m_channelTable->rowCount()) {
+        selectChannelRowFromClick(m_channelDropCompletedRow, Qt::NoModifier);
+    } else {
+        m_channelTable->clearSelection();
+        m_channelTable->setCurrentIndex(QModelIndex());
+        if (auto *selection = m_channelTable->selectionModel()) {
+            selection->clear();
+        }
+        m_lastChannelClickedRow = -1;
     }
-    m_lastChannelClickedRow = -1;
     m_channelDragRow = -1;
+    m_channelDragStarted = false;
+    m_channelDropCompletedRow = -1;
     return true;
 }
 
@@ -1130,6 +1273,125 @@ void MainWindow::selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifi
     }
 
     selection->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+}
+
+int MainWindow::channelInsertRowForPosition(const QPoint &pos) const
+{
+    if (!m_channelTable) return -1;
+
+    int row = m_channelTable->rowAt(pos.y());
+    if (row < 0) return m_channelTable->rowCount();
+
+    int rowTop = m_channelTable->rowViewportPosition(row);
+    int rowHeight = m_channelTable->rowHeight(row);
+    return pos.y() < rowTop + rowHeight / 2 ? row : row + 1;
+}
+
+void MainWindow::showChannelDropIndicator(int insertRow)
+{
+    if (!m_channelTable || !m_channelDropIndicator) return;
+
+    insertRow = qBound(0, insertRow, m_channelTable->rowCount());
+    if (m_channelDropInsertRow == insertRow && m_channelDropIndicator->isVisible()) return;
+
+    int y = 0;
+    if (insertRow <= 0) {
+        y = 0;
+    } else if (insertRow >= m_channelTable->rowCount()) {
+        int lastRow = m_channelTable->rowCount() - 1;
+        y = lastRow >= 0
+            ? m_channelTable->rowViewportPosition(lastRow) + m_channelTable->rowHeight(lastRow)
+            : 0;
+    } else {
+        y = m_channelTable->rowViewportPosition(insertRow);
+    }
+
+    m_channelDropInsertRow = insertRow;
+    m_channelDropIndicator->setGeometry(0, qMax(0, y - 1),
+                                        m_channelTable->viewport()->width(), 2);
+    m_channelDropIndicator->raise();
+    m_channelDropIndicator->show();
+}
+
+void MainWindow::hideChannelDropIndicator()
+{
+    m_channelDropInsertRow = -1;
+    if (m_channelDropIndicator) {
+        m_channelDropIndicator->hide();
+    }
+}
+
+bool MainWindow::handleChannelListDragEvent(QObject *obj, QEvent *event)
+{
+    if (!m_channelTable || obj != m_channelTable->viewport() || !event) return false;
+
+    if (event->type() == QEvent::DragLeave) {
+        hideChannelDropIndicator();
+        event->accept();
+        return true;
+    }
+
+    if (event->type() == QEvent::DragEnter) {
+        auto *dragEvent = static_cast<QDragEnterEvent *>(event);
+        if (!viewerFromDragMime(dragEvent->mimeData(), false)) return false;
+
+        int insertRow = channelInsertRowForPosition(dragEvent->position().toPoint());
+        showChannelDropIndicator(insertRow);
+        dragEvent->acceptProposedAction();
+        return true;
+    }
+
+    if (event->type() == QEvent::DragMove) {
+        auto *dragEvent = static_cast<QDragMoveEvent *>(event);
+        if (!viewerFromDragMime(dragEvent->mimeData(), false)) return false;
+
+        int insertRow = channelInsertRowForPosition(dragEvent->position().toPoint());
+        showChannelDropIndicator(insertRow);
+        dragEvent->acceptProposedAction();
+        return true;
+    }
+
+    if (event->type() != QEvent::Drop) return false;
+
+    auto *dropEvent = static_cast<QDropEvent *>(event);
+    auto *viewer = viewerFromDragMime(dropEvent->mimeData(), false);
+    int sourceRow = channelRowForViewer(viewer);
+    int insertRow = channelInsertRowForPosition(dropEvent->position().toPoint());
+    hideChannelDropIndicator();
+
+    if (!viewer || sourceRow < 0 || insertRow < 0) return false;
+
+    int targetRow = qBound(0, insertRow, m_channelListOrder.size());
+    if (targetRow > sourceRow) {
+        --targetRow;
+    }
+    targetRow = qBound(0, targetRow, m_channelListOrder.size() - 1);
+
+    if (targetRow != sourceRow) {
+        m_channelListOrder.removeAt(sourceRow);
+        m_channelListOrder.insert(targetRow, viewer);
+        renderChannelTable();
+        scheduleSaveChannels();
+        appendLog(QString("Channel list reordered: %1 → row %2").arg(viewer->name()).arg(targetRow + 1),
+                  LogLevel::DEBUG);
+    }
+
+    m_channelDropCompletedRow = targetRow;
+    selectChannelRowFromClick(targetRow, Qt::NoModifier);
+    dropEvent->acceptProposedAction();
+    return true;
+}
+
+bool MainWindow::isGridDragTarget(QObject *obj) const
+{
+    if (!obj) return false;
+
+    for (QObject *current = obj; current; current = current->parent()) {
+        if (current == m_gridWidget) return true;
+        if (m_gridScrollArea && current == m_gridScrollArea->viewport()) return true;
+        if (m_channelTable && current == m_channelTable->viewport()) return false;
+    }
+    return false;
 }
 
 int MainWindow::gridIndexForDropTarget(QObject *obj, const QPoint &pos) const
@@ -1242,16 +1504,17 @@ void MainWindow::hideDropHighlight()
 bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
 {
     if (!event) return false;
+    if (!isGridDragTarget(obj)) return false;
 
-    auto hasChannelMime = [](const QMimeData *mimeData) {
-        return mimeData
-            && (mimeData->hasFormat(CHANNEL_DRAG_MIME)
-                || mimeData->hasFormat(VIEWER_DRAG_MIME));
-    };
+    if (event->type() == QEvent::DragLeave) {
+        hideDropHighlight();
+        event->accept();
+        return true;
+    }
 
     if (event->type() == QEvent::DragEnter) {
         auto *dragEvent = static_cast<QDragEnterEvent *>(event);
-        if (!hasChannelMime(dragEvent->mimeData())) return false;
+        if (!viewerFromDragMime(dragEvent->mimeData(), true)) return false;
 
         int targetIndex = gridIndexForDropTarget(obj, dragEvent->position().toPoint());
         if (targetIndex < 0) {
@@ -1266,7 +1529,7 @@ bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::DragMove) {
         auto *dragEvent = static_cast<QDragMoveEvent *>(event);
-        if (!hasChannelMime(dragEvent->mimeData())) return false;
+        if (!viewerFromDragMime(dragEvent->mimeData(), true)) return false;
 
         int targetIndex = gridIndexForDropTarget(obj, dragEvent->position().toPoint());
         if (targetIndex < 0) {
@@ -1281,23 +1544,9 @@ bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
 
     if (event->type() == QEvent::Drop) {
         auto *dropEvent = static_cast<QDropEvent *>(event);
-        if (!hasChannelMime(dropEvent->mimeData())) return false;
 
         int targetIndex = gridIndexForDropTarget(obj, dropEvent->position().toPoint());
-        bool ok = false;
-        VlcWidget *viewer = nullptr;
-        if (dropEvent->mimeData()->hasFormat(CHANNEL_DRAG_MIME)) {
-            int row = dropEvent->mimeData()->data(CHANNEL_DRAG_MIME).toInt(&ok);
-            if (ok && row >= 0 && row < m_viewers.size()) {
-                viewer = m_viewers[row];
-            }
-        } else if (dropEvent->mimeData()->hasFormat(VIEWER_DRAG_MIME)) {
-            quintptr ptr = dropEvent->mimeData()->data(VIEWER_DRAG_MIME).toULongLong(&ok);
-            auto *candidate = reinterpret_cast<VlcWidget *>(ptr);
-            if (ok && m_viewers.contains(candidate)) {
-                viewer = candidate;
-            }
-        }
+        VlcWidget *viewer = viewerFromDragMime(dropEvent->mimeData(), true);
 
         if (targetIndex < 0 || !viewer) {
             hideDropHighlight();
@@ -1316,6 +1565,10 @@ bool MainWindow::handleGridDragEvent(QObject *obj, QEvent *event)
 bool MainWindow::eventFilter(QObject *obj, QEvent *event)
 {
     if (m_channelTable && obj == m_channelTable->viewport()) {
+        if (handleChannelListDragEvent(obj, event)) {
+            return true;
+        }
+
         if (event->type() == QEvent::MouseButtonPress) {
             auto *mouseEvent = static_cast<QMouseEvent *>(event);
             if (mouseEvent->button() == Qt::LeftButton) {

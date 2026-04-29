@@ -20,6 +20,7 @@ class StatusBar;
 class QScrollArea;
 class QPushButton;
 class QFrame;
+class QMimeData;
 
 enum class LogLevel { DEBUG, INFO, WARN, ERROR };
 
@@ -43,6 +44,7 @@ private slots:
 private:
     libvlc_instance_t *m_vlcInstance = nullptr;
     QVector<VlcWidget *> m_viewers;
+    QVector<VlcWidget *> m_channelListOrder;
     QVector<QFrame *> m_gridCells;
     QHash<VlcWidget *, int> m_gridIndexes;
     QWidget *m_gridWidget = nullptr;
@@ -63,6 +65,9 @@ private:
     int m_channelDragRow = -1;
     bool m_channelDragStarted = false;
     int m_lastChannelClickedRow = -1;
+    QFrame *m_channelDropIndicator = nullptr;
+    int m_channelDropInsertRow = -1;
+    int m_channelDropCompletedRow = -1;
     QPoint m_viewerDragStartPos;
     VlcWidget *m_viewerDragSource = nullptr;
     bool m_viewerDragStarted = false;
@@ -88,7 +93,11 @@ private:
 
     // 헬퍼
     VlcWidget *createViewer(const QString &name, const QString &url, bool autoReconnect = true);
-    void addChannelToTable(const QString &name, const QString &url);
+    void addChannelToTable(VlcWidget *viewer);
+    void renderChannelTable();
+    VlcWidget *viewerForChannelRow(int row) const;
+    int channelRowForViewer(VlcWidget *viewer) const;
+    VlcWidget *viewerFromDragMime(const QMimeData *mimeData, bool allowGridViewerMime) const;
     int effectiveGridCols() const;
 
     void rebuildGrid();
@@ -97,16 +106,23 @@ private:
     void setLeftPanelVisible(bool visible);
     void setRightPanelVisible(bool visible);
     void updatePanelToggleButtons();
-    void editChannel(int row);
-    void updateChannelTableRow(int row, const QString &name, const QString &url);
+    void editChannel(VlcWidget *viewer);
+    void updateChannelTableRow(VlcWidget *viewer);
+    bool removeChannel(VlcWidget *viewer);
     int firstFreeGridIndex(VlcWidget *except = nullptr) const;
     int maxAssignedGridIndex() const;
     VlcWidget *viewerAtGridIndex(int index, VlcWidget *except = nullptr) const;
     void moveViewerToGridIndex(VlcWidget *viewer, int targetIndex);
+    void alignGridToChannelListOrder();
     bool startChannelDragIfNeeded(QMouseEvent *event);
     bool startViewerDragIfNeeded(QMouseEvent *event);
     VlcWidget *viewerForDragObject(QObject *obj) const;
     void selectChannelRowFromClick(int row, Qt::KeyboardModifiers modifiers);
+    bool handleChannelListDragEvent(QObject *obj, QEvent *event);
+    int channelInsertRowForPosition(const QPoint &pos) const;
+    void showChannelDropIndicator(int insertRow);
+    void hideChannelDropIndicator();
+    bool isGridDragTarget(QObject *obj) const;
     bool handleGridDragEvent(QObject *obj, QEvent *event);
     int gridIndexForDropTarget(QObject *obj, const QPoint &pos) const;
     QFrame *createGridCell();
