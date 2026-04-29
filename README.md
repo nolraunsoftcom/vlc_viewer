@@ -179,6 +179,10 @@ viewer/
 - `~/.ziilab/channels.json` — 채널 목록 (자동 저장/로드)
 - `~/.ziilab/snapshots/` — 스냅샷 저장 경로
 
+## 운영 문서
+
+- [VOXL2 RTSP 네트워크 접근 가이드](docs/voxl2-rtsp-network-access.md)
+
 ---
 
 ## 개발
