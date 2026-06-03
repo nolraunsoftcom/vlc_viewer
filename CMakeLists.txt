@@ -35,8 +35,14 @@ find_path(VLC_INCLUDE_DIR
     HINTS ${_vlc_include_hints}
     REQUIRED)
 
+if(WIN32)
+    set(_vlc_library_names libvlc)
+else()
+    set(_vlc_library_names vlc libvlc)
+endif()
+
 find_library(VLC_LIBRARY
-    NAMES vlc libvlc
+    NAMES ${_vlc_library_names}
     HINTS ${_vlc_library_hints}
     REQUIRED)
 

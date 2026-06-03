@@ -76,7 +76,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vlc-sdk
-          key: vlc-sdk-windows-3.0.21-a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843-runtime-sdk
+          key: vlc-sdk-windows-3.0.21-9d2b24d6bc4196b3da8d181a3878678ba272e2a7690321f8826da76a69b2fb9c-7z-sdk
 
       - name: Download VLC runtime and SDK
         if: steps.cache-vlc.outputs.cache-hit != 'true'
@@ -85,13 +85,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
-          $vlcBinUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip"
-          $vlcBinHash = "a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843"
+          $vlcBinUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.7z"
+          $vlcBinHash = "9d2b24d6bc4196b3da8d181a3878678ba272e2a7690321f8826da76a69b2fb9c"
 
           Write-Host "Downloading VLC runtime and SDK..."
-          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-win64.zip $vlcBinUrl
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-win64.7z $vlcBinUrl
 
-          if ((Get-FileHash vlc-win64.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
+          if ((Get-FileHash vlc-win64.7z -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
             throw "Downloaded VLC archive checksum mismatch"
           }
 
@@ -99,7 +99,10 @@ jobs:
           New-Item -ItemType Directory -Path C:\vlc-sdk | Out-Null
 
           Write-Host "Extracting VLC archive..."
-          Expand-Archive -Path vlc-win64.zip -DestinationPath C:\vlc-sdk -Force
+          7z x vlc-win64.7z -oC:\vlc-sdk -y
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to extract VLC archive"
+          }
 
           $runtimeRoot = Get-ChildItem C:\vlc-sdk -Directory | Select-Object -First 1
           if (-not $runtimeRoot) {
