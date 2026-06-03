@@ -15,8 +15,8 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
 {
     if (!g_mainWindow) return;
 
-    // VLC 레벨: 0=DEBUG, 1=NOTICE, 2=WARNING, 3=ERROR
-    if (level < 2) return;
+    // VLC 레벨: 0=DEBUG, 2=NOTICE, 3=WARNING, 4=ERROR
+    if (level < LIBVLC_WARNING) return;
 
     char buf[512];
     vsnprintf(buf, sizeof(buf), fmt, args);
@@ -36,6 +36,7 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
         msgStr.contains("Missing or unsupported sample") ||
         msgStr.contains("late buffer for mux input") ||
         msgStr.contains("buffer deadlock prevented") ||
+        msgStr.contains("unsupported control query", Qt::CaseInsensitive) ||
         msgStr.contains("cannot peek") ||
         msgStr.contains("no more input streams for this mux") ||
         msgStr.contains("Missing video bitrate") ||
@@ -48,7 +49,7 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
         return;
     }
 
-    LogLevel logLevel = (level >= 3) ? LogLevel::ERROR : LogLevel::WARN;
+    LogLevel logLevel = (level >= LIBVLC_ERROR) ? LogLevel::ERROR : LogLevel::WARN;
     QString msg = QString("VLC: %1").arg(QString::fromUtf8(buf).trimmed());
 
     QMetaObject::invokeMethod(g_mainWindow, [=]() {
@@ -91,8 +92,8 @@ int main(int argc, char *argv[])
     // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
     std::vector<const char *> vlcArgs = {
         "--reset-plugins-cache",
-        "--network-caching=200",
-        "--live-caching=200",
+        "--network-caching=500",
+        "--live-caching=500",
         "--clock-jitter=0",
         "--clock-synchro=0",
         "--drop-late-frames",

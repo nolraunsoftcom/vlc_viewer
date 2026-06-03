@@ -137,8 +137,8 @@ libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
     auto *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
     if (!media) return nullptr;
     libvlc_media_add_option(media, ":rtsp-tcp");
-    libvlc_media_add_option(media, ":network-caching=200");
-    libvlc_media_add_option(media, ":live-caching=200");
+    libvlc_media_add_option(media, ":network-caching=500");
+    libvlc_media_add_option(media, ":live-caching=500");
     libvlc_media_add_option(media, ":no-audio");
     libvlc_media_add_option(media, ":audio-track=-1");
     return media;
