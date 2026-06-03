@@ -3,7 +3,6 @@
 #include <QByteArray>
 #include <QFile>
 #include <QList>
-#include <QThread>
 #include <algorithm>
 
 #if defined(_WIN32)
@@ -11,23 +10,13 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-#include <psapi.h>
 #elif defined(__APPLE__) && defined(__MACH__)
 #include <mach/mach.h>
 #include <mach/mach_host.h>
-#include <sys/resource.h>
 #include <sys/sysctl.h>
-#elif defined(__unix__)
-#include <sys/resource.h>
-#include <unistd.h>
 #endif
 
 namespace {
-
-double timevalToSeconds(long seconds, long microseconds)
-{
-    return static_cast<double>(seconds) + static_cast<double>(microseconds) / 1000000.0;
-}
 
 #if defined(_WIN32)
 quint64 fileTimeToUInt64(const FILETIME &fileTime)
@@ -41,42 +30,9 @@ quint64 fileTimeToUInt64(const FILETIME &fileTime)
 
 }  // namespace
 
-ResourceMonitor::ResourceMonitor()
-    : m_logicalCpuCount(detectLogicalCpuCount())
-{
-}
-
 ResourceSnapshot ResourceMonitor::sample()
 {
     ResourceSnapshot snapshot;
-
-    bool processCpuOk = false;
-    const double processCpuSeconds = readProcessCpuSeconds(&processCpuOk);
-    const auto now = std::chrono::steady_clock::now();
-    if (processCpuOk) {
-        if (m_hasProcessCpuSample) {
-            const double elapsedSeconds =
-                std::chrono::duration<double>(now - m_lastProcessSampleTime).count();
-            const double cpuDeltaSeconds = processCpuSeconds - m_lastProcessCpuSeconds;
-            if (elapsedSeconds > 0.0 && cpuDeltaSeconds >= 0.0 && m_logicalCpuCount > 0) {
-                const double percent =
-                    (cpuDeltaSeconds / elapsedSeconds) * 100.0 / m_logicalCpuCount;
-                snapshot.processCpuPercent = std::clamp(percent, 0.0, 100.0);
-                snapshot.processCpuValid = true;
-            }
-        }
-
-        m_lastProcessCpuSeconds = processCpuSeconds;
-        m_lastProcessSampleTime = now;
-        m_hasProcessCpuSample = true;
-    }
-
-    bool processMemoryOk = false;
-    const quint64 processMemoryBytes = readProcessMemoryBytes(&processMemoryOk);
-    if (processMemoryOk) {
-        snapshot.processMemoryBytes = processMemoryBytes;
-        snapshot.processMemoryValid = true;
-    }
 
     quint64 systemIdleTicks = 0;
     quint64 systemTotalTicks = 0;
@@ -108,103 +64,6 @@ ResourceSnapshot ResourceMonitor::sample()
     }
 
     return snapshot;
-}
-
-int ResourceMonitor::detectLogicalCpuCount()
-{
-    return std::max(1, QThread::idealThreadCount());
-}
-
-double ResourceMonitor::readProcessCpuSeconds(bool *ok)
-{
-    if (ok) *ok = false;
-
-#if defined(_WIN32)
-    FILETIME createTime{};
-    FILETIME exitTime{};
-    FILETIME kernelTime{};
-    FILETIME userTime{};
-    if (!GetProcessTimes(GetCurrentProcess(), &createTime, &exitTime, &kernelTime, &userTime)) {
-        return 0.0;
-    }
-
-    if (ok) *ok = true;
-    return static_cast<double>(fileTimeToUInt64(kernelTime) + fileTimeToUInt64(userTime))
-        / 10000000.0;
-#elif defined(__unix__) || (defined(__APPLE__) && defined(__MACH__))
-    rusage usage{};
-    if (getrusage(RUSAGE_SELF, &usage) != 0) {
-        return 0.0;
-    }
-
-    if (ok) *ok = true;
-    return timevalToSeconds(usage.ru_utime.tv_sec, usage.ru_utime.tv_usec)
-        + timevalToSeconds(usage.ru_stime.tv_sec, usage.ru_stime.tv_usec);
-#else
-    return 0.0;
-#endif
-}
-
-quint64 ResourceMonitor::readProcessMemoryBytes(bool *ok)
-{
-    if (ok) *ok = false;
-
-#if defined(_WIN32)
-    PROCESS_MEMORY_COUNTERS_EX counters{};
-    counters.cb = sizeof(counters);
-    if (!GetProcessMemoryInfo(GetCurrentProcess(),
-                              reinterpret_cast<PROCESS_MEMORY_COUNTERS *>(&counters),
-                              sizeof(counters))) {
-        return 0;
-    }
-
-    if (ok) *ok = true;
-    return static_cast<quint64>(counters.WorkingSetSize);
-#elif defined(__APPLE__) && defined(__MACH__)
-    task_vm_info_data_t vmInfo{};
-    mach_msg_type_number_t vmInfoCount = TASK_VM_INFO_COUNT;
-    if (task_info(mach_task_self(),
-                  TASK_VM_INFO,
-                  reinterpret_cast<task_info_t>(&vmInfo),
-                  &vmInfoCount) == KERN_SUCCESS) {
-        if (ok) *ok = true;
-        return static_cast<quint64>(vmInfo.phys_footprint);
-    }
-
-    mach_task_basic_info_data_t basicInfo{};
-    mach_msg_type_number_t basicInfoCount = MACH_TASK_BASIC_INFO_COUNT;
-    if (task_info(mach_task_self(),
-                  MACH_TASK_BASIC_INFO,
-                  reinterpret_cast<task_info_t>(&basicInfo),
-                  &basicInfoCount) == KERN_SUCCESS) {
-        if (ok) *ok = true;
-        return static_cast<quint64>(basicInfo.resident_size);
-    }
-
-    return 0;
-#elif defined(__linux__)
-    QFile file(QStringLiteral("/proc/self/statm"));
-    if (!file.open(QIODevice::ReadOnly)) {
-        return 0;
-    }
-
-    const QList<QByteArray> parts = file.readAll().simplified().split(' ');
-    if (parts.size() < 2) {
-        return 0;
-    }
-
-    bool parsed = false;
-    const quint64 rssPages = parts.at(1).toULongLong(&parsed);
-    const long pageSize = sysconf(_SC_PAGESIZE);
-    if (!parsed || pageSize <= 0) {
-        return 0;
-    }
-
-    if (ok) *ok = true;
-    return rssPages * static_cast<quint64>(pageSize);
-#else
-    return 0;
-#endif
 }
 
 bool ResourceMonitor::readSystemCpuTicks(quint64 *idleTicks, quint64 *totalTicks)

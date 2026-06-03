@@ -14,6 +14,7 @@
 #include <QTextEdit>
 #include <QButtonGroup>
 #include <QListWidget>
+#include <functional>
 #include <vlc/vlc.h>
 #include "ConnectionDialog.h"
 
@@ -24,6 +25,7 @@ class QScrollArea;
 class QPushButton;
 class QFrame;
 class QMimeData;
+class QResizeEvent;
 
 enum class LogLevel { DEBUG, INFO, WARN, ERROR };
 
@@ -105,6 +107,7 @@ private:
 
     // 상태 바
     StatusBar *m_statusBar = nullptr;
+    QFrame *m_toast = nullptr;
 
     // 헬퍼
     VlcWidget *createViewer(const QString &name, const QString &url, bool autoReconnect = true);
@@ -160,6 +163,7 @@ private:
     void hideSelectedGridHighlight();
     void syncSelectedGridHighlightFromChannelSelection();
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     void setupSidebar(QWidget *parent);
     void setupRightPanel(QWidget *parent);
     void setupFilesTab(QWidget *parent);
@@ -171,6 +175,15 @@ private:
     void openFilesListItem(QListWidgetItem *item);
     void openFullscreenTab(VlcWidget *viewer);
     void closeVideoTab(int index);
+    void showToast(const QString &title,
+                   const QString &detail,
+                   LogLevel level,
+                   const QString &primaryLabel = QString(),
+                   std::function<void()> primaryAction = {},
+                   const QString &secondaryLabel = QString(),
+                   std::function<void()> secondaryAction = {},
+                   int timeoutMs = 3500);
+    void positionToast();
 
     void saveChannels();
     void scheduleSaveChannels();

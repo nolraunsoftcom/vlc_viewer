@@ -48,7 +48,16 @@ message(STATUS "Using libVLC library: ${VLC_LIBRARY}")
 # ============================================================
 set(APP_ICON_MACOS "${CMAKE_SOURCE_DIR}/resources/logo.icns")
 set_source_files_properties(${APP_ICON_MACOS} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
-set(APP_ICON_WINDOWS "${CMAKE_SOURCE_DIR}/resources/app.rc")
+
+if(WIN32)
+    set(APP_ICON_WINDOWS_ICON "${CMAKE_SOURCE_DIR}/resources/logo.ico")
+    set(APP_ICON_WINDOWS_RC "${CMAKE_BINARY_DIR}/generated/app.rc")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/generated")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/resources/app.rc.in"
+        "${APP_ICON_WINDOWS_RC}"
+        @ONLY)
+endif()
 
 if(APPLE)
     add_executable(viewer MACOSX_BUNDLE
@@ -72,7 +81,7 @@ elseif(WIN32)
         src/StatusBar.cpp
         src/ResourceMonitor.cpp
         resources/resources.qrc
-        ${APP_ICON_WINDOWS}
+        ${APP_ICON_WINDOWS_RC}
     )
 else()
     add_executable(viewer
@@ -89,10 +98,6 @@ endif()
 
 target_include_directories(viewer PRIVATE ${VLC_INCLUDE_DIR})
 target_link_libraries(viewer PRIVATE Qt6::Widgets Qt6::Concurrent ${VLC_LIBRARY})
-
-if(WIN32)
-    target_link_libraries(viewer PRIVATE Psapi)
-endif()
 
 if(APPLE)
     set_target_properties(viewer PROPERTIES

@@ -113,6 +113,7 @@ protected:
 private:
     libvlc_instance_t *m_vlcInstance = nullptr;
     libvlc_media_player_t *m_player = nullptr;
+    libvlc_media_player_t *m_recordPlayer = nullptr;
     QWidget *m_videoSurface = nullptr;
     QLabel *m_placeholder = nullptr;
     QLabel *m_nameLabel = nullptr;
@@ -124,12 +125,14 @@ private:
     bool m_autoReconnect = true;
     bool m_isFullscreen = false;
     bool m_reconnecting = false;
+    bool m_hasConnectedOnce = false;
     Status m_status = Status::Idle;
     void setStatus(Status s);
     static const int MAX_RECONNECT = 30;
 
     // 녹화 상태
     RecState m_recState = RecState::Idle;
+    bool m_recordingUsesPlaybackPlayer = false;
     QString m_recordingPath;
     QDateTime m_recordingStartTime;
     int m_recWatchdogAttempts = 0;
@@ -154,17 +157,23 @@ private:
     void attachToSurface();
     void detachEvents();
     void setupEvents();
+    void detachRecordingEvents();
+    void setupRecordingEvents();
     void showStatus(const QString &text);
     void showContextMenu(const QPoint &globalPos);
     void tryReconnect();
     QFuture<void> cleanupPlayer();
+    QFuture<void> cleanupRecordingPlayer();
+    void waitForCleanupFinished();
+    void waitForPlayerCleanupFinished();
 
     // 녹화 헬퍼
     VlcWidget *recordingTarget();
     void setRecState(RecState s);
-    libvlc_media_t *openMedia(const QString &url, bool withRecording);
-    bool restartPlayerPreserving(bool withRecording);
-    bool openAndPlayNoRecording();
+    libvlc_media_t *openPlaybackMedia(const QString &url);
+    libvlc_media_t *openRecordingMedia(const QString &url, const QString &path);
+    bool startPlaybackPlayer(Status pendingStatus);
+    void failRecordingStartup(const QString &path, const QString &reason);
     void stopRecordingInternal(RecStopReason reason);
     void startRecordingWatchdog(const QString &path);
     void scheduleWatchdogTick(const QString &path);
@@ -176,8 +185,12 @@ private:
 
     QTimer *m_reconnectTimer = nullptr;
     int m_reconnectCount = 0;
+    QFuture<void> m_playerCleanup;
+    QFuture<void> m_recordCleanup;
 
     static void onPlaying(const libvlc_event_t *event, void *data);
     static void onEndReached(const libvlc_event_t *event, void *data);
     static void onError(const libvlc_event_t *event, void *data);
+    static void onRecordEndReached(const libvlc_event_t *event, void *data);
+    static void onRecordError(const libvlc_event_t *event, void *data);
 };

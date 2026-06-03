@@ -49,11 +49,11 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
 {
     // 상단 정보 바
     auto *infoBar = new QWidget(this);
-    infoBar->setStyleSheet("background-color: rgba(0,0,0,180);");
+    infoBar->setStyleSheet("background-color: #f3f3f3; border-bottom: 1px solid #d0d0d0;");
     infoBar->setFixedHeight(28);
 
     m_nameLabel = new QLabel(this);
-    m_nameLabel->setStyleSheet("color: white; font-size: 11px; font-weight: bold;");
+    m_nameLabel->setStyleSheet("color: #222; font-size: 11px; font-weight: bold;");
 
     m_recBadge = new QLabel(this);
     m_recBadge->setStyleSheet(Style::REC_BADGE_ACTIVE);
@@ -100,7 +100,7 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     // 연결 전 안내 텍스트
     m_placeholder = new QLabel("No Stream", this);
     m_placeholder->setAlignment(Qt::AlignCenter);
-    m_placeholder->setStyleSheet("color: #666; font-size: 14px; background-color: black;");
+    m_placeholder->setStyleSheet("color: #777; font-size: 14px; background-color: #ededed;");
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -125,43 +125,49 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
 VlcWidget::~VlcWidget()
 {
     stop();
+    waitForCleanupFinished();
 }
 
 // ============================================================
-// media 생성 공통 헬퍼 (녹화 옵션 포함)
+// media 생성 헬퍼
 // ============================================================
 
-libvlc_media_t *VlcWidget::openMedia(const QString &url, bool withRecording)
+libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
 {
     auto *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
     if (!media) return nullptr;
     libvlc_media_add_option(media, ":rtsp-tcp");
-    if (withRecording && !m_recordingPath.isEmpty()) {
-        QString sout = QString(":sout=#duplicate{dst=display,"
-                               "dst=std{access=file,mux=mkv,dst=\"%1\"}}")
-                        .arg(formatSoutPath(m_recordingPath));
-        libvlc_media_add_option(media, sout.toUtf8().constData());
-        libvlc_media_add_option(media, ":sout-keep");
-    }
+    libvlc_media_add_option(media, ":network-caching=200");
+    libvlc_media_add_option(media, ":live-caching=200");
+    libvlc_media_add_option(media, ":no-audio");
+    libvlc_media_add_option(media, ":audio-track=-1");
     return media;
 }
 
-void VlcWidget::play(const QString &url, const QString &name)
+libvlc_media_t *VlcWidget::openRecordingMedia(const QString &url, const QString &path)
 {
-    stop();
+    auto *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
+    if (!media) return nullptr;
+    libvlc_media_add_option(media, ":rtsp-tcp");
+    libvlc_media_add_option(media, ":no-audio");
+    libvlc_media_add_option(media, ":audio-track=-1");
+
+    const QString sout = QString(":sout=#std{access=file,mux=mkv,dst=\"%1\"}")
+        .arg(formatSoutPath(path));
+    libvlc_media_add_option(media, sout.toUtf8().constData());
+    libvlc_media_add_option(media, ":sout-keep");
+    return media;
+}
+
+bool VlcWidget::startPlaybackPlayer(Status pendingStatus)
+{
+    waitForPlayerCleanupFinished();
     resetStatsCache();
 
-    m_url = url;
-    m_name = name;
-    m_reconnecting = false;
-    m_reconnectCount = 0;
-
-    libvlc_media_t *media = openMedia(url, /*withRecording=*/false);
+    libvlc_media_t *media = openPlaybackMedia(m_url);
     if (!media) {
-        log(QString("[%1] Failed to create media for %2").arg(m_name, url), 3);
-        setStatus(Status::Failed);
-        showStatus("Invalid URL");
-        return;
+        log(QString("[%1] Failed to create media for %2").arg(m_name, m_url), 3);
+        return false;
     }
 
     m_player = libvlc_media_player_new_from_media(media);
@@ -169,12 +175,30 @@ void VlcWidget::play(const QString &url, const QString &name)
 
     if (!m_player) {
         log(QString("[%1] Failed to create player").arg(m_name), 3);
-        setStatus(Status::Failed);
-        showStatus("Player Error");
-        return;
+        return false;
     }
 
     attachToSurface();
+    setupEvents();
+    if (libvlc_media_player_play(m_player) != 0) {
+        log(QString("[%1] Failed to start playback").arg(m_name), 3);
+        cleanupPlayer();
+        return false;
+    }
+
+    setStatus(pendingStatus);
+    return true;
+}
+
+void VlcWidget::play(const QString &url, const QString &name)
+{
+    stop();
+
+    m_url = url;
+    m_name = name;
+    m_reconnecting = false;
+    m_hasConnectedOnce = false;
+    m_reconnectCount = 0;
 
     m_placeholder->hide();
     m_videoSurface->show();
@@ -182,9 +206,13 @@ void VlcWidget::play(const QString &url, const QString &name)
     m_nameLabel->setText(name);
     m_nameLabel->show();
 
-    setupEvents();
-    libvlc_media_player_play(m_player);
-    setStatus(Status::Connecting);
+    if (!startPlaybackPlayer(Status::Connecting)) {
+        setStatus(Status::Failed);
+        showStatus("Player Error");
+        updateRecordUi();
+        return;
+    }
+
     log(QString("[%1] Connecting to %2").arg(m_name, url), 0);
 
     updateRecordUi();
@@ -218,19 +246,72 @@ void VlcWidget::detachEvents()
     libvlc_event_detach(em, libvlc_MediaPlayerPlaying, onPlaying, this);
 }
 
+void VlcWidget::setupRecordingEvents()
+{
+    if (!m_recordPlayer) return;
+
+    libvlc_event_manager_t *em = libvlc_media_player_event_manager(m_recordPlayer);
+    libvlc_event_attach(em, libvlc_MediaPlayerEndReached, onRecordEndReached, this);
+    libvlc_event_attach(em, libvlc_MediaPlayerEncounteredError, onRecordError, this);
+}
+
+void VlcWidget::detachRecordingEvents()
+{
+    if (!m_recordPlayer) return;
+
+    libvlc_event_manager_t *em = libvlc_media_player_event_manager(m_recordPlayer);
+    libvlc_event_detach(em, libvlc_MediaPlayerEndReached, onRecordEndReached, this);
+    libvlc_event_detach(em, libvlc_MediaPlayerEncounteredError, onRecordError, this);
+}
+
 QFuture<void> VlcWidget::cleanupPlayer()
 {
-    if (!m_player) return QtFuture::makeReadyVoidFuture();
+    if (!m_player) {
+        return m_playerCleanup.isRunning() ? m_playerCleanup : QtFuture::makeReadyVoidFuture();
+    }
 
     detachEvents();
 
     auto *player = m_player;
     m_player = nullptr;
     // 비동기로 정리 (UI 블로킹 방지). future 는 호출자가 필요하면 대기.
-    return QtConcurrent::run([player]() {
+    m_playerCleanup = QtConcurrent::run([player]() {
         libvlc_media_player_stop(player);
         libvlc_media_player_release(player);
     });
+    return m_playerCleanup;
+}
+
+QFuture<void> VlcWidget::cleanupRecordingPlayer()
+{
+    if (!m_recordPlayer) {
+        return m_recordCleanup.isRunning() ? m_recordCleanup : QtFuture::makeReadyVoidFuture();
+    }
+
+    detachRecordingEvents();
+
+    auto *player = m_recordPlayer;
+    m_recordPlayer = nullptr;
+    m_recordCleanup = QtConcurrent::run([player]() {
+        libvlc_media_player_stop(player);
+        libvlc_media_player_release(player);
+    });
+    return m_recordCleanup;
+}
+
+void VlcWidget::waitForCleanupFinished()
+{
+    waitForPlayerCleanupFinished();
+    if (m_recordCleanup.isRunning()) {
+        m_recordCleanup.waitForFinished();
+    }
+}
+
+void VlcWidget::waitForPlayerCleanupFinished()
+{
+    if (m_playerCleanup.isRunning()) {
+        m_playerCleanup.waitForFinished();
+    }
 }
 
 void VlcWidget::setStatus(Status s)
@@ -269,6 +350,7 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
         self->m_reconnecting = false;
+        self->m_hasConnectedOnce = true;
         self->m_reconnectCount = 0;
         self->m_reconnectTimer->stop();
         self->setStatus(Status::Connected);
@@ -305,14 +387,9 @@ void VlcWidget::onEndReached(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
-        // 녹화 상태라면 Disconnect 경로로 녹화 마무리
-        if (self->m_recState == RecState::Active) {
+        const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
+        if (self->m_recordingUsesPlaybackPlayer && self->m_recState != RecState::Idle) {
             self->stopRecordingInternal(RecStopReason::Disconnect);
-        } else if (self->m_recState == RecState::Starting) {
-            const QString p = self->m_recordingPath;
-            self->m_recordingPath.clear();
-            self->setRecState(RecState::Idle);
-            emit self->recordingFailed(self, p, "disconnected during startup");
         }
 
         if (!self->m_reconnecting) {
@@ -321,9 +398,11 @@ void VlcWidget::onEndReached(const libvlc_event_t *, void *data)
         self->m_reconnecting = true;
         self->setStatus(Status::Disconnected);
         self->showStatus("끊김");
-        self->log(QString("[%1] Disconnected").arg(self->m_name), 2);
+        self->log(initialFailure
+            ? QString("[%1] Initial connection ended; retrying").arg(self->m_name)
+            : QString("[%1] Disconnected").arg(self->m_name), 2);
         if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
-            self->m_reconnectTimer->start();
+            self->m_reconnectTimer->start(initialFailure ? 1000 : 5000);
         }
     }, Qt::QueuedConnection);
 }
@@ -332,13 +411,9 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
-        if (self->m_recState == RecState::Active) {
+        const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
+        if (self->m_recordingUsesPlaybackPlayer && self->m_recState != RecState::Idle) {
             self->stopRecordingInternal(RecStopReason::Disconnect);
-        } else if (self->m_recState == RecState::Starting) {
-            const QString p = self->m_recordingPath;
-            self->m_recordingPath.clear();
-            self->setRecState(RecState::Idle);
-            emit self->recordingFailed(self, p, "disconnected during startup");
         }
 
         if (!self->m_reconnecting) {
@@ -347,9 +422,44 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
         self->m_reconnecting = true;
         self->setStatus(Status::Disconnected);
         self->showStatus("연결 오류");
-        self->log(QString("[%1] Connection Error").arg(self->m_name), 3);
+        self->log(initialFailure
+            ? QString("[%1] Initial connection failed; retrying").arg(self->m_name)
+            : QString("[%1] Connection Error").arg(self->m_name),
+            initialFailure ? 2 : 3);
         if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
-            self->m_reconnectTimer->start();
+            self->m_reconnectTimer->start(initialFailure ? 1000 : 5000);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void VlcWidget::onRecordEndReached(const libvlc_event_t *, void *data)
+{
+    auto *self = static_cast<VlcWidget *>(data);
+    QMetaObject::invokeMethod(self, [self]() {
+        if (self->m_recState == RecState::Starting && !self->m_recordingUsesPlaybackPlayer) {
+            const QString path = self->m_recordingPath;
+            self->failRecordingStartup(path, "recording stream ended during startup");
+            return;
+        }
+
+        if (self->m_recState != RecState::Idle) {
+            self->stopRecordingInternal(RecStopReason::Disconnect);
+        }
+    }, Qt::QueuedConnection);
+}
+
+void VlcWidget::onRecordError(const libvlc_event_t *, void *data)
+{
+    auto *self = static_cast<VlcWidget *>(data);
+    QMetaObject::invokeMethod(self, [self]() {
+        if (self->m_recState == RecState::Starting && !self->m_recordingUsesPlaybackPlayer) {
+            const QString path = self->m_recordingPath;
+            self->failRecordingStartup(path, "recording stream failed during startup");
+            return;
+        }
+
+        if (self->m_recState != RecState::Idle) {
+            self->stopRecordingInternal(RecStopReason::Disconnect);
         }
     }, Qt::QueuedConnection);
 }
@@ -377,26 +487,9 @@ void VlcWidget::tryReconnect()
     showStatus(QString("재연결중... (%1/%2)").arg(m_reconnectCount).arg(MAX_RECONNECT));
     log(QString("[%1] Reconnecting... attempt %2").arg(m_name).arg(m_reconnectCount), 2);
 
-    // 재접속 시엔 녹화 걸지 않음 (끊김 시 자동 중단 정책)
-    libvlc_media_t *media = openMedia(m_url, /*withRecording=*/false);
-    if (!media) {
-        log(QString("[%1] Failed to create media").arg(m_name), 3);
+    if (!startPlaybackPlayer(Status::Reconnecting)) {
         m_reconnectTimer->start();
-        return;
     }
-
-    m_player = libvlc_media_player_new_from_media(media);
-    libvlc_media_release(media);
-
-    if (!m_player) {
-        log(QString("[%1] Failed to create player").arg(m_name), 3);
-        m_reconnectTimer->start();
-        return;
-    }
-
-    attachToSurface();
-    setupEvents();
-    libvlc_media_player_play(m_player);
 }
 
 void VlcWidget::reconnect()
@@ -411,7 +504,15 @@ void VlcWidget::reconnect()
     m_reconnecting = false;
     m_reconnectCount = 0;
 
-    play(url, name);
+    m_url = url;
+    m_name = name;
+    resetStatsCache();
+    showStatus("재연결중...");
+    log(QString("[%1] Reconnecting...").arg(m_name), 2);
+
+    if (!startPlaybackPlayer(Status::Reconnecting)) {
+        fallbackToReconnect();
+    }
 }
 
 void VlcWidget::updateTime(const QString &timeStr)
@@ -427,7 +528,7 @@ void VlcWidget::stop()
     }
     m_reconnecting = false;
 
-    // 녹화 중이었다면 Remove 의미로 마무리 (재생 복구 스킵, flush 만 비동기)
+    // 녹화 중이었다면 Remove 의미로 마무리 (녹화 player flush 만 비동기)
     if (m_recState != RecState::Idle) {
         finalizeRecordingForShutdown();
     }
@@ -625,8 +726,7 @@ bool VlcWidget::takeSnapshot(const QString &filePath)
         return true;
     }
 
-    // 2차 폴백: sout 파이프라인이 활성이면 libVLC snapshot 이 실패할 수 있음 (3.x 제약).
-    // QScreen 으로 네이티브 비디오 서피스 영역을 OS-level 스크린 그랩.
+    // 2차 폴백: libVLC snapshot 이 실패하면 네이티브 비디오 서피스 영역을 OS-level 스크린 그랩.
     QScreen *screen = m_videoSurface->screen();
     if (!screen) screen = QGuiApplication::primaryScreen();
     if (!screen) return false;
@@ -719,38 +819,6 @@ void VlcWidget::fallbackToReconnect()
     }
 }
 
-bool VlcWidget::restartPlayerPreserving(bool withRecording)
-{
-    QString url = m_url;
-    cleanupPlayer();  // future 는 여기선 미사용
-    resetStatsCache();
-    libvlc_media_t *media = openMedia(url, withRecording);
-    if (!media) return false;
-    m_player = libvlc_media_player_new_from_media(media);
-    libvlc_media_release(media);
-    if (!m_player) return false;
-    attachToSurface();
-    setupEvents();
-    libvlc_media_player_play(m_player);
-    setStatus(Status::Connecting);
-    return true;
-}
-
-bool VlcWidget::openAndPlayNoRecording()
-{
-    resetStatsCache();
-    libvlc_media_t *media = openMedia(m_url, /*withRecording=*/false);
-    if (!media) return false;
-    m_player = libvlc_media_player_new_from_media(media);
-    libvlc_media_release(media);
-    if (!m_player) return false;
-    attachToSurface();
-    setupEvents();
-    libvlc_media_player_play(m_player);
-    setStatus(Status::Connecting);
-    return true;
-}
-
 // ============================================================
 // 녹화 — 시작
 // ============================================================
@@ -760,24 +828,41 @@ void VlcWidget::startRecording()
     VlcWidget *t = recordingTarget();
     if (t != this) { t->startRecording(); return; }
 
-    if (m_recState != RecState::Idle || !isPlaying() || m_url.isEmpty()) return;
+    if (m_recState != RecState::Idle || m_recordPlayer || !isPlaying() || m_url.isEmpty()) return;
 
     const QString path = makeRecordingPath();
     m_recordingPath = path;
     m_recordingStartTime = QDateTime::currentDateTime();
+    m_recordingUsesPlaybackPlayer = false;
+    setRecState(RecState::Starting);
 
-    if (!restartPlayerPreserving(/*withRecording=*/true)) {
+    libvlc_media_t *media = openRecordingMedia(m_url, path);
+    if (!media) {
         m_recordingPath.clear();
+        setRecState(RecState::Idle);
         emit recordingFailed(this, path, "media/player creation failed");
         log(QString("[%1] Recording failed (creation): %2").arg(m_name, path), 3);
-
-        if (!restartPlayerPreserving(false)) {
-            fallbackToReconnect();
-        }
         return;
     }
 
-    setRecState(RecState::Starting);
+    m_recordPlayer = libvlc_media_player_new_from_media(media);
+    libvlc_media_release(media);
+
+    if (!m_recordPlayer) {
+        m_recordingPath.clear();
+        setRecState(RecState::Idle);
+        emit recordingFailed(this, path, "media/player creation failed");
+        log(QString("[%1] Recording failed (player): %2").arg(m_name, path), 3);
+        return;
+    }
+
+    setupRecordingEvents();
+    if (libvlc_media_player_play(m_recordPlayer) != 0) {
+        cleanupRecordingPlayer();
+        failRecordingStartup(path, "recording stream failed to start");
+        return;
+    }
+
     startRecordingWatchdog(path);
 }
 
@@ -785,6 +870,18 @@ void VlcWidget::startRecordingWatchdog(const QString &path)
 {
     m_recWatchdogAttempts = 0;
     scheduleWatchdogTick(path);
+}
+
+void VlcWidget::failRecordingStartup(const QString &path, const QString &reason)
+{
+    if (m_recState == RecState::Idle) return;
+
+    cleanupRecordingPlayer();
+    m_recordingPath.clear();
+    m_recordingUsesPlaybackPlayer = false;
+    setRecState(RecState::Idle);
+    log(QString("[%1] Recording failed: %2 (%3)").arg(m_name, path, reason), 3);
+    emit recordingFailed(this, path, reason);
 }
 
 void VlcWidget::scheduleWatchdogTick(const QString &path)
@@ -804,14 +901,7 @@ void VlcWidget::scheduleWatchdogTick(const QString &path)
         if (++m_recWatchdogAttempts >= 10) {
             // 5초 타임아웃
             const QString reason = fi.exists() ? "no data written in 5s" : "file not created in 5s";
-            m_recordingPath.clear();
-            setRecState(RecState::Idle);
-            log(QString("[%1] Recording failed: %2 (%3)").arg(m_name, path, reason), 3);
-            emit recordingFailed(this, path, reason);
-
-            if (!restartPlayerPreserving(false)) {
-                fallbackToReconnect();
-            }
+            failRecordingStartup(path, reason);
             return;
         }
 
@@ -847,21 +937,28 @@ void VlcWidget::stopRecordingInternal(RecStopReason reason)
     const bool wasActive = (m_recState == RecState::Active);
     const bool byDisc = (reason == RecStopReason::Disconnect);
     const bool isRemove = (reason == RecStopReason::Remove);
+    const bool usedPlaybackPlayer = m_recordingUsesPlaybackPlayer;
 
     m_recordingPath.clear();
+    m_recordingUsesPlaybackPlayer = false;
     setRecState(RecState::Idle);
 
     // 현재 녹화중 플레이어 cleanup → 파일 finalizer 완료를 future 로 추적
-    QFuture<void> flushFuture = cleanupPlayer();
+    QFuture<void> flushFuture = usedPlaybackPlayer
+        ? cleanupPlayer()
+        : cleanupRecordingPlayer();
 
-    // 재생 복구는 Manual 일 때만
-    if (reason == RecStopReason::Manual) {
-        if (!openAndPlayNoRecording()) {
+    if (isRemove) {
+        flushFuture.waitForFinished();
+        return;
+    }
+
+    if (usedPlaybackPlayer && reason == RecStopReason::Manual) {
+        flushFuture.waitForFinished();
+        if (!startPlaybackPlayer(Status::Connecting)) {
             fallbackToReconnect();
         }
     }
-    // Disconnect: onEnd/onError 가 setStatus(Disconnected) + reconnect 타이머 처리
-    // Remove: 재생 복구 안 함
 
     if (wasActive) {
         auto *watcher = new QFutureWatcher<void>(this);
@@ -870,9 +967,6 @@ void VlcWidget::stopRecordingInternal(RecStopReason reason)
                 qint64 bytes = QFileInfo(path).size();
                 int dur = start.secsTo(stoppedAt);
                 if (dur < 0) dur = 0;
-                log(QString("[%1] Recording stopped%2: %3 (%4, %5s)")
-                    .arg(m_name, byDisc ? " (disconnect)" : "", path, humanSize(bytes))
-                    .arg(dur), 1);
                 emit recordingStopped(this, path, bytes, dur, byDisc);
                 watcher->deleteLater();
             });

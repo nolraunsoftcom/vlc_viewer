@@ -25,6 +25,10 @@ public:
     static std::optional<ConnectionInfo> getConnectionInfo(QWidget *parent,
                                                            const ConnectionInfo &initialInfo,
                                                            const QString &windowTitle = "채널 수정");
+    static bool isRtspUrlAllowed(const QString &url);
+
+protected:
+    void accept() override;
 
 private:
     QLineEdit *m_channelName = nullptr;

@@ -13,6 +13,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QMenu>
 #include <QEvent>
@@ -42,7 +43,7 @@
 #include <QItemSelectionModel>
 
 static const int HEADER_HEIGHT = 32;
-static const QString HEADER_STYLE = "background-color: #222; border-bottom: 1px solid #333;";
+static const QString HEADER_STYLE = "background-color: #f3f3f3; border-bottom: 1px solid #d0d0d0;";
 static const int MAX_LOG_LINES = 1000;
 static const int GRID_SPACING = 1;
 static const int VIEWER_INFO_BAR_HEIGHT = 28;
@@ -52,9 +53,9 @@ static const int PANEL_TOGGLE_WIDTH = 18;
 static const char *CHANNEL_DRAG_MIME = "application/x-ziilab-channel-viewer-ptr";
 static const char *VIEWER_DRAG_MIME = "application/x-ziilab-viewer-ptr";
 static const QString GRID_CELL_STYLE =
-    "QFrame#gridCell { background-color: #111; border: none; }";
+    "QFrame#gridCell { background-color: #ededed; border: none; }";
 static const QString GRID_CELL_HIGHLIGHT_STYLE =
-    "QFrame#gridCell { background-color: #111; border: 1px solid rgba(74, 158, 255, 150); }";
+    "QFrame#gridCell { background-color: #ededed; border: 1px solid rgba(0, 120, 215, 180); }";
 
 namespace {
 
@@ -64,12 +65,12 @@ void applyChannelStatusLabel(QLabel *statusLabel, VlcWidget::Status status)
 
     QString color;
     switch (status) {
-        case VlcWidget::Status::Connected:    color = "#4a4"; break;
-        case VlcWidget::Status::Connecting:   color = "#888"; break;
+        case VlcWidget::Status::Connected:    color = "#12823b"; break;
+        case VlcWidget::Status::Connecting:   color = "#666"; break;
         case VlcWidget::Status::Reconnecting: color = "#e8a838"; break;
-        case VlcWidget::Status::Disconnected: color = "#e85050"; break;
-        case VlcWidget::Status::Failed:       color = "#e85050"; break;
-        default:                              color = "#888"; break;
+        case VlcWidget::Status::Disconnected: color = "#d13438"; break;
+        case VlcWidget::Status::Failed:       color = "#d13438"; break;
+        default:                              color = "#666"; break;
     }
 
     statusLabel->setText(VlcWidget::statusText(status));
@@ -113,11 +114,38 @@ void applyChannelStatsLabel(QLabel *statsLabel, const VlcWidget::Stats &stats)
     switch (severity) {
         case 2: color = "#e85050"; break;
         case 1: color = "#e8a838"; break;
-        default: color = "#8a8a8a"; break;
+        default: color = "#5f5f5f"; break;
     }
     statsLabel->setProperty("statsSeverity", severity);
     statsLabel->setStyleSheet(
         QString("color: %1; font-size: 10px; background: transparent;").arg(color));
+}
+
+QString formatToastDuration(int seconds)
+{
+    if (seconds < 0) seconds = 0;
+    const int h = seconds / 3600;
+    const int m = (seconds / 60) % 60;
+    const int s = seconds % 60;
+    if (h > 0) {
+        return QStringLiteral("%1:%2:%3")
+            .arg(h)
+            .arg(m, 2, 10, QLatin1Char('0'))
+            .arg(s, 2, 10, QLatin1Char('0'));
+    }
+    return QStringLiteral("%1:%2")
+        .arg(m, 2, 10, QLatin1Char('0'))
+        .arg(s, 2, 10, QLatin1Char('0'));
+}
+
+QString formatToastBytes(qint64 bytes)
+{
+    if (bytes < 1024) return QStringLiteral("%1 B").arg(bytes);
+    const double kib = bytes / 1024.0;
+    if (kib < 1024.0) return QStringLiteral("%1 KB").arg(kib, 0, 'f', 1);
+    const double mib = kib / 1024.0;
+    if (mib < 1024.0) return QStringLiteral("%1 MB").arg(mib, 0, 'f', 1);
+    return QStringLiteral("%1 GB").arg(mib / 1024.0, 0, 'f', 2);
 }
 
 } // namespace
@@ -130,7 +158,7 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     resize(1400, 800);
 
     auto *central = new QWidget(this);
-    central->setStyleSheet("background-color: #1a1a1a;");
+    central->setStyleSheet("background-color: #f0f0f0;");
     auto *centralLayout = new QVBoxLayout(central);
     centralLayout->setContentsMargins(0, 0, 0, 0);
     centralLayout->setSpacing(0);
@@ -142,7 +170,7 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     m_sidebar = new QWidget(panelRow);
     m_sidebar->setFixedWidth(LEFT_PANEL_WIDTH);
-    m_sidebar->setStyleSheet("background-color: #1a1a1a;");
+    m_sidebar->setStyleSheet("background-color: #f5f5f5;");
     setupSidebar(m_sidebar);
     mainLayout->addWidget(m_sidebar);
 
@@ -154,7 +182,7 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     auto *videoArea = new QWidget(panelRow);
     videoArea->setObjectName("videoArea");
-    videoArea->setStyleSheet("#videoArea { background-color: black; border-left: 1px solid #333; border-right: 1px solid #333; }");
+    videoArea->setStyleSheet("#videoArea { background-color: #d0d0d0; border-left: 1px solid #c8c8c8; border-right: 1px solid #c8c8c8; }");
     setupVideoArea(videoArea);
     mainLayout->addWidget(videoArea, 1);
 
@@ -166,7 +194,7 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     m_rightPanel = new QWidget(panelRow);
     m_rightPanel->setFixedWidth(RIGHT_PANEL_WIDTH);
-    m_rightPanel->setStyleSheet("background-color: #1a1a1a;");
+    m_rightPanel->setStyleSheet("background-color: #f5f5f5;");
     setupRightPanel(m_rightPanel);
     mainLayout->addWidget(m_rightPanel);
     updatePanelToggleButtons();
@@ -175,7 +203,7 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     auto *statusSeparator = new QFrame(central);
     statusSeparator->setFixedHeight(1);
-    statusSeparator->setStyleSheet("background-color: #333; border: none;");
+    statusSeparator->setStyleSheet("background-color: #d0d0d0; border: none;");
     centralLayout->addWidget(statusSeparator);
 
     m_statusBar = new StatusBar(central);
@@ -262,6 +290,20 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
     connect(viewer, &VlcWidget::snapshotTaken, this, [this](const QString &path) {
         appendLog(QString("Snapshot: %1").arg(path), LogLevel::INFO);
         if (m_currentFileType == 0) refreshFilesList();
+        const QFileInfo fi(path);
+        showToast(QStringLiteral("스냅샷 저장됨"),
+                  fi.fileName(),
+                  LogLevel::INFO,
+                  QStringLiteral("열기"),
+                  [path]() {
+                      QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                  },
+                  QStringLiteral("폴더"),
+                  [path]() {
+                      QDesktopServices::openUrl(
+                          QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+                  },
+                  3500);
     });
     connect(viewer, &VlcWidget::recordingStarted, this,
         [this](VlcWidget *w, const QString &path) {
@@ -275,11 +317,37 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
                 .arg(mb, 0, 'f', 1).arg(dur),
                 byDisc ? LogLevel::WARN : LogLevel::INFO);
             if (m_currentFileType == 1) refreshFilesList();
+            showToast(byDisc ? QStringLiteral("녹화 자동 저장됨")
+                             : QStringLiteral("녹화 저장됨"),
+                      QStringLiteral("%1 · %2 · %3")
+                          .arg(w->name(), formatToastDuration(dur), formatToastBytes(bytes)),
+                      byDisc ? LogLevel::WARN : LogLevel::INFO,
+                      QStringLiteral("재생"),
+                      [path]() {
+                          QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+                      },
+                      QStringLiteral("폴더"),
+                      [path]() {
+                          QDesktopServices::openUrl(
+                              QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+                      },
+                      5000);
         });
     connect(viewer, &VlcWidget::recordingFailed, this,
         [this](VlcWidget *w, const QString &path, const QString &reason) {
             appendLog(QString("[%1] Recording failed: %2 (%3)")
                 .arg(w->name(), path, reason), LogLevel::ERROR);
+            showToast(QStringLiteral("녹화 실패"),
+                      QStringLiteral("%1 · %2").arg(w->name(), reason),
+                      LogLevel::ERROR,
+                      QStringLiteral("로그 보기"),
+                      [this]() {
+                          setRightPanelVisible(true);
+                          if (m_rightTabs) m_rightTabs->setCurrentIndex(2);
+                      },
+                      QString(),
+                      {},
+                      9000);
         });
     connect(viewer, &VlcWidget::statusChanged, this, [this](VlcWidget *v, VlcWidget::Status s) {
         int row = channelRowForViewer(v);
@@ -311,7 +379,7 @@ void MainWindow::addChannelToTable(VlcWidget *viewer)
     topRow->setContentsMargins(0, 0, 0, 0);
     auto *nameLabel = new QLabel(viewer->name(), cellWidget);
     nameLabel->setObjectName("nameLabel");
-    nameLabel->setStyleSheet("color: white; font-size: 13px; font-weight: bold; background: transparent;");
+    nameLabel->setStyleSheet("color: #222; font-size: 13px; font-weight: bold; background: transparent;");
     auto *statusLabel = new QLabel("대기", cellWidget);
     statusLabel->setObjectName("statusLabel");
     applyChannelStatusLabel(statusLabel, viewer->status());
@@ -321,7 +389,7 @@ void MainWindow::addChannelToTable(VlcWidget *viewer)
 
     auto *urlLabel = new QLabel(viewer->url(), cellWidget);
     urlLabel->setObjectName("urlLabel");
-    urlLabel->setStyleSheet("color: #999; font-size: 11px; background: transparent;");
+    urlLabel->setStyleSheet("color: #666; font-size: 11px; background: transparent;");
     urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
 
     auto *statsLabel = new QLabel(cellWidget);
@@ -414,7 +482,7 @@ void MainWindow::setupSidebar(QWidget *parent)
     auto *headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(10, 0, 10, 0);
     auto *title = new QLabel("ZiiLab 관제시스템", header);
-    title->setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;");
+    title->setStyleSheet("color: #333; font-size: 11px; font-weight: bold;");
     headerLayout->addWidget(title);
     layout->addWidget(header);
 
@@ -436,10 +504,10 @@ void MainWindow::setupSidebar(QWidget *parent)
     m_channelTable->horizontalHeader()->setStretchLastSection(true);
     m_channelTable->setShowGrid(true);
     m_channelTable->setStyleSheet(
-        "QTableWidget { background-color: #1a1a1a; color: white; border: 1px solid #333; "
-        "gridline-color: #333; }"
-        "QTableWidget::item { background-color: #1a1a1a; }"
-        "QTableWidget::item:selected { background-color: #2a3a5a; }");
+        "QTableWidget { background-color: #ffffff; color: #222; border: 1px solid #d0d0d0; "
+        "gridline-color: #e5e5e5; }"
+        "QTableWidget::item { background-color: #ffffff; }"
+        "QTableWidget::item:selected { background-color: #cfe8ff; color: #111; }");
     connect(m_channelTable, &QTableWidget::cellDoubleClicked, this, [this](int row, int) {
         if (auto *viewer = viewerForChannelRow(row)) {
             openFullscreenTab(viewer);
@@ -476,7 +544,7 @@ void MainWindow::setupSidebar(QWidget *parent)
         }
     });
     m_channelDropIndicator = new QFrame(m_channelTable->viewport());
-    m_channelDropIndicator->setStyleSheet("background-color: #4a9eff; border: none;");
+    m_channelDropIndicator->setStyleSheet("background-color: #0078d4; border: none;");
     m_channelDropIndicator->setFixedHeight(2);
     m_channelDropIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_channelDropIndicator->hide();
@@ -489,15 +557,15 @@ void MainWindow::setupSidebar(QWidget *parent)
     auto *addBtn = new QPushButton("+", body);
     addBtn->setFixedHeight(26);
     addBtn->setStyleSheet(
-        "QPushButton { color: white; background-color: #444; border: 1px solid #555; font-size: 13px; }"
-        "QPushButton:hover { background-color: #555; }");
+        "QPushButton { color: #222; background-color: #f7f7f7; border: 1px solid #bdbdbd; font-size: 13px; }"
+        "QPushButton:hover { background-color: #e8f2ff; border-color: #0078d4; }");
     connect(addBtn, &QPushButton::clicked, this, &MainWindow::addChannel);
 
     auto *removeBtn = new QPushButton("-", body);
     removeBtn->setFixedHeight(26);
     removeBtn->setStyleSheet(
-        "QPushButton { color: white; background-color: #444; border: 1px solid #555; font-size: 13px; }"
-        "QPushButton:hover { background-color: #555; }");
+        "QPushButton { color: #222; background-color: #f7f7f7; border: 1px solid #bdbdbd; font-size: 13px; }"
+        "QPushButton:hover { background-color: #e8f2ff; border-color: #0078d4; }");
     connect(removeBtn, &QPushButton::clicked, this, &MainWindow::removeSelectedChannel);
 
     auto *alignBtn = new QPushButton("정렬", body);
@@ -505,8 +573,8 @@ void MainWindow::setupSidebar(QWidget *parent)
     alignBtn->setFixedWidth(44);
     alignBtn->setToolTip("좌측 목록 순서대로 영상 정렬");
     alignBtn->setStyleSheet(
-        "QPushButton { color: white; background-color: #444; border: 1px solid #555; font-size: 11px; }"
-        "QPushButton:hover { background-color: #555; }");
+        "QPushButton { color: #222; background-color: #f7f7f7; border: 1px solid #bdbdbd; font-size: 11px; }"
+        "QPushButton:hover { background-color: #e8f2ff; border-color: #0078d4; }");
     connect(alignBtn, &QPushButton::clicked, this, &MainWindow::alignGridToChannelListOrder);
 
     footerLayout->addWidget(addBtn, 1);
@@ -535,11 +603,12 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_videoTabs->setStyleSheet(
         "QTabWidget::pane { border: none; background-color: black; }"
         "QTabWidget::tab-bar { left: 0px; }"
-        "QTabBar { background-color: #222; border-bottom: 1px solid #333; }"
-        "QTabBar::tab { background-color: #222; color: #888; border: none; "
+        "QTabBar { background-color: #f3f3f3; border-bottom: 1px solid #d0d0d0; }"
+        "QTabBar::tab { background-color: #f3f3f3; color: #555; border: none; "
+        "border-bottom: 1px solid #d0d0d0; "
         "padding: 0px; font-size: 11px; min-width: 120px; min-height: 30px; }"
-        "QTabBar::tab:selected { background-color: #111; color: white; "
-        "border-bottom: 2px solid #4a9eff; }");
+        "QTabBar::tab:selected { background-color: #ffffff; color: #111; "
+        "border-bottom: 2px solid #0078d4; }");
 
     m_gridPage = new QWidget();
     auto *gridPageLayout = new QVBoxLayout(m_gridPage);
@@ -550,11 +619,11 @@ void MainWindow::setupVideoArea(QWidget *parent)
     m_gridScrollArea->setWidgetResizable(true);
     m_gridScrollArea->viewport()->setAcceptDrops(true);
     m_gridScrollArea->setFrameShape(QFrame::NoFrame);
-    m_gridScrollArea->setStyleSheet("QScrollArea { background-color: black; border: none; }");
+    m_gridScrollArea->setStyleSheet("QScrollArea { background-color: #f0f0f0; border: none; }");
 
     m_gridWidget = new QWidget();
     m_gridWidget->setAcceptDrops(true);
-    m_gridWidget->setStyleSheet("background-color: #333;");
+    m_gridWidget->setStyleSheet("background-color: #c8c8c8;");
     m_grid = new QGridLayout(m_gridWidget);
     m_grid->setSpacing(GRID_SPACING);
     m_grid->setContentsMargins(0, 0, 0, 0);
@@ -584,11 +653,11 @@ QPushButton *MainWindow::createPanelToggleButton(QWidget *parent)
     button->setFocusPolicy(Qt::NoFocus);
     button->setCursor(Qt::PointingHandCursor);
     button->setStyleSheet(
-        "QPushButton { color: #aaa; background-color: #222; border: none; "
-        "border-left: 1px solid #333; border-right: 1px solid #333; "
+        "QPushButton { color: #555; background-color: #f3f3f3; border: none; "
+        "border-left: 1px solid #d0d0d0; border-right: 1px solid #d0d0d0; "
         "font-size: 12px; padding: 0; }"
-        "QPushButton:hover { color: white; background-color: #333; }"
-        "QPushButton:pressed { background-color: #111; }");
+        "QPushButton:hover { color: #111; background-color: #e8f2ff; }"
+        "QPushButton:pressed { background-color: #cfe8ff; }");
     return button;
 }
 
@@ -641,13 +710,14 @@ void MainWindow::setupRightPanel(QWidget *parent)
     m_rightTabs->tabBar()->setDocumentMode(true);
     m_rightTabs->tabBar()->setFixedHeight(HEADER_HEIGHT);
     m_rightTabs->setStyleSheet(
-        "QTabWidget::pane { border: none; background-color: #1a1a1a; }"
+        "QTabWidget::pane { border: none; background-color: #f5f5f5; }"
         "QTabWidget::tab-bar { left: 0px; }"
-        "QTabBar { background-color: #222; border-bottom: 1px solid #333; }"
-        "QTabBar::tab { background-color: #222; color: #888; border: none; "
-        "padding: 8px 16px; font-size: 11px; min-width: 50px; }"
-        "QTabBar::tab:selected { background-color: #1a1a1a; color: white; "
-        "border-bottom: 2px solid #4a9eff; }");
+        "QTabBar { background-color: #f3f3f3; border-bottom: 1px solid #d0d0d0; }"
+        "QTabBar::tab { background-color: #f3f3f3; color: #555; border: none; "
+        "border-bottom: 1px solid #d0d0d0; "
+        "padding: 0px; font-size: 11px; min-width: 86px; min-height: 30px; }"
+        "QTabBar::tab:selected { background-color: #ffffff; color: #111; "
+        "border-bottom: 2px solid #0078d4; }");
 
     // 화면 탭
     auto *settingsTab = new QWidget();
@@ -656,7 +726,7 @@ void MainWindow::setupRightPanel(QWidget *parent)
     settingsLayout->setSpacing(16);
 
     auto *colSection = new QLabel("그리드 컬럼", settingsTab);
-    colSection->setStyleSheet("color: #888; font-size: 10px;");
+    colSection->setStyleSheet("color: #555; font-size: 10px;");
     settingsLayout->addWidget(colSection);
 
     auto *colBtnLayout = new QHBoxLayout();
@@ -674,10 +744,10 @@ void MainWindow::setupRightPanel(QWidget *parent)
         btn->setFixedHeight(28);
         btn->setMinimumWidth(38);
         btn->setStyleSheet(
-            "QPushButton { color: #888; background-color: #222; border: 1px solid #444; "
+            "QPushButton { color: #333; background-color: #ffffff; border: 1px solid #bdbdbd; "
             "border-radius: 3px; font-size: 11px; padding: 0 8px; }"
-            "QPushButton:checked { color: white; background-color: #335; border-color: #4a9eff; }"
-            "QPushButton:hover { background-color: #2a2a2a; }");
+            "QPushButton:checked { color: #111; background-color: #cfe8ff; border-color: #0078d4; }"
+            "QPushButton:hover { background-color: #e8f2ff; }");
         m_colBtnGroup->addButton(btn, values[i]);
         colBtnLayout->addWidget(btn);
         if (values[i] == m_gridCols) btn->setChecked(true);
@@ -687,12 +757,12 @@ void MainWindow::setupRightPanel(QWidget *parent)
     settingsLayout->addLayout(colBtnLayout);
     updateGridColumnButtonState();
     settingsLayout->addStretch();
-    m_rightTabs->addTab(settingsTab, "화면");
+    m_rightTabs->addTab(settingsTab, "설정");
 
     // 녹화 탭
     auto *filesTab = new QWidget();
     setupFilesTab(filesTab);
-    m_rightTabs->addTab(filesTab, "녹화");
+    m_rightTabs->addTab(filesTab, "스냅샷/녹화");
 
     // 로그 탭
     auto *logTab = new QWidget();
@@ -702,7 +772,7 @@ void MainWindow::setupRightPanel(QWidget *parent)
     m_logView = new QTextEdit(logTab);
     m_logView->setReadOnly(true);
     m_logView->setStyleSheet(
-        "QTextEdit { background-color: #1a1a1a; color: #ccc; border: none; "
+        "QTextEdit { background-color: #ffffff; color: #222; border: none; "
         "font-family: monospace; font-size: 11px; padding: 4px; }");
     logLayout->addWidget(m_logView);
     m_rightTabs->addTab(logTab, "로그");
@@ -721,14 +791,14 @@ void MainWindow::appendLog(const QString &message, LogLevel level)
 
     switch (level) {
         case LogLevel::DEBUG: color = "#666"; label = "DBG"; break;
-        case LogLevel::INFO:  color = "#8cb4ff"; label = "INF"; break;
+        case LogLevel::INFO:  color = "#005fb8"; label = "INF"; break;
         case LogLevel::WARN:  color = "#e8a838"; label = "WRN"; break;
-        case LogLevel::ERROR: color = "#e85050"; label = "ERR"; break;
+        case LogLevel::ERROR: color = "#d13438"; label = "ERR"; break;
     }
 
-    m_logView->append(QString("<span style='color:#555'>[%1]</span> "
+    m_logView->append(QString("<span style='color:#777'>[%1]</span> "
         "<span style='color:%2'>[%3]</span> "
-        "<span style='color:#ccc'>%4</span>")
+        "<span style='color:#222'>%4</span>")
         .arg(timestamp, color, label, message));
 
     // 로그 라인 수 제한
@@ -738,6 +808,132 @@ void MainWindow::appendLog(const QString &message, LogLevel level)
         cursor.removeSelectedText();
         cursor.deleteChar();
     }
+}
+
+void MainWindow::showToast(const QString &title,
+                           const QString &detail,
+                           LogLevel level,
+                           const QString &primaryLabel,
+                           std::function<void()> primaryAction,
+                           const QString &secondaryLabel,
+                           std::function<void()> secondaryAction,
+                           int timeoutMs)
+{
+    if (m_toast) {
+        m_toast->deleteLater();
+        m_toast = nullptr;
+    }
+
+    QWidget *toastParent = centralWidget() ? centralWidget() : this;
+    auto *toast = new QFrame(toastParent);
+    toast->setObjectName("toast");
+    toast->setAttribute(Qt::WA_StyledBackground, true);
+    m_toast = toast;
+
+    Q_UNUSED(level);
+
+    toast->setStyleSheet(QStringLiteral(
+        "QFrame#toast { background-color: #ffffff; border: 1px solid #c8c8c8; "
+        "border-radius: 6px; }"
+        "QLabel { background-color: transparent; color: #222; }"
+        "QPushButton { color: #222; background-color: #f7f7f7; border: 1px solid #bdbdbd; "
+        "border-radius: 3px; padding: 5px 11px; font-size: 12px; }"
+        "QPushButton:hover { background-color: #e8f2ff; border-color: #0078d4; }"));
+
+    const int toastWidth = qMin(380, qMax(260, toastParent->width() - 32));
+    toast->setFixedWidth(toastWidth);
+
+    auto *layout = new QVBoxLayout(toast);
+    layout->setContentsMargins(12, 9, 12, 9);
+    layout->setSpacing(5);
+
+    auto closeToast = [this, toast]() {
+        if (m_toast == toast) {
+            m_toast = nullptr;
+            toast->deleteLater();
+        }
+    };
+
+    auto *headerRow = new QHBoxLayout();
+    headerRow->setContentsMargins(0, 0, 0, 0);
+    headerRow->setSpacing(8);
+
+    auto *titleLabel = new QLabel(title, toast);
+    titleLabel->setStyleSheet("font-size: 13px; font-weight: bold;");
+    titleLabel->setTextInteractionFlags(Qt::NoTextInteraction);
+    headerRow->addWidget(titleLabel, 1);
+
+    auto *closeBtn = new QPushButton(QStringLiteral("×"), toast);
+    closeBtn->setFixedSize(22, 22);
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setStyleSheet(
+        "QPushButton { color: #666; background-color: transparent; border: none; "
+        "border-radius: 3px; padding: 0; font-size: 16px; }"
+        "QPushButton:hover { color: #111; background-color: #e5e5e5; }");
+    connect(closeBtn, &QPushButton::clicked, this, closeToast);
+    headerRow->addWidget(closeBtn);
+    layout->addLayout(headerRow);
+
+    if (!detail.isEmpty()) {
+        auto *detailLabel = new QLabel(detail, toast);
+        detailLabel->setWordWrap(true);
+        detailLabel->setStyleSheet("color: #555; font-size: 12px;");
+        detailLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(detailLabel);
+    }
+
+    if (!primaryLabel.isEmpty() || !secondaryLabel.isEmpty()) {
+        auto *buttonRow = new QHBoxLayout();
+        buttonRow->setContentsMargins(0, 3, 0, 0);
+        buttonRow->addStretch();
+
+        auto addActionButton = [&](const QString &label, std::function<void()> action) {
+            if (label.isEmpty()) return;
+            auto *button = new QPushButton(label, toast);
+            button->setCursor(Qt::PointingHandCursor);
+            connect(button, &QPushButton::clicked, this, [action, closeToast]() {
+                if (action) action();
+                closeToast();
+            });
+            buttonRow->addWidget(button);
+        };
+
+        addActionButton(secondaryLabel, secondaryAction);
+        addActionButton(primaryLabel, primaryAction);
+        layout->addLayout(buttonRow);
+    }
+
+    toast->adjustSize();
+    positionToast();
+    toast->show();
+    toast->raise();
+
+    QPointer<QFrame> toastPtr(toast);
+    QTimer::singleShot(timeoutMs, this, [this, toastPtr]() {
+        if (toastPtr && m_toast == toastPtr.data()) {
+            m_toast = nullptr;
+            toastPtr->deleteLater();
+        }
+    });
+}
+
+void MainWindow::positionToast()
+{
+    if (!m_toast) return;
+    auto *toastParent = qobject_cast<QWidget *>(m_toast->parent());
+    if (!toastParent) return;
+
+    const int margin = 14;
+    const int bottomMargin = margin + (m_statusBar ? m_statusBar->height() : 0);
+    const int x = qMax(margin, toastParent->width() - m_toast->width() - margin);
+    const int y = qMax(margin, toastParent->height() - m_toast->height() - bottomMargin);
+    m_toast->move(x, y);
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    positionToast();
 }
 
 // ============================================================
@@ -804,15 +1000,18 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
     int tabIndex = m_videoTabs->addTab(fullViewer, "");
 
     auto *tabLabel = new QLabel(viewer->name());
-    tabLabel->setStyleSheet("color: #ccc; font-size: 11px; padding-left: 8px;");
+    tabLabel->setAutoFillBackground(false);
+    tabLabel->setStyleSheet(
+        "color: #333; font-size: 11px; padding-left: 8px; "
+        "background-color: transparent;");
     m_videoTabs->tabBar()->setTabButton(tabIndex, QTabBar::LeftSide, tabLabel);
 
     auto *closeBtn = new QPushButton("×");
     closeBtn->setFixedSize(18, 18);
     closeBtn->setStyleSheet(
-        "QPushButton { color: #666; background: transparent; border: none; "
+        "QPushButton { color: #666; background-color: transparent; border: none; "
         "font-size: 12px; padding: 0; margin: 0; }"
-        "QPushButton:hover { color: #ccc; background-color: #444; border-radius: 3px; }");
+        "QPushButton:hover { color: #111; background-color: #dbeafe; border-radius: 3px; }");
     connect(closeBtn, &QPushButton::clicked, this, [this, fullViewer]() {
         for (int i = 1; i < m_videoTabs->count(); ++i) {
             if (m_videoTabs->widget(i) == fullViewer) {
@@ -881,9 +1080,14 @@ void MainWindow::saveChannels()
     root["gridCols"] = m_gridCols;
     root["channels"] = arr;
 
-    QFile file(channelsFilePath());
+    QSaveFile file(channelsFilePath());
     if (file.open(QIODevice::WriteOnly)) {
-        file.write(QJsonDocument(root).toJson());
+        const QByteArray payload = QJsonDocument(root).toJson();
+        if (file.write(payload) != payload.size()) {
+            file.cancelWriting();
+            return;
+        }
+        file.commit();
     }
 }
 
@@ -918,10 +1122,14 @@ void MainWindow::loadChannels()
 
     for (const auto &val : arr) {
         QJsonObject obj = val.toObject();
-        QString name = obj["name"].toString();
-        QString url = obj["url"].toString();
+        QString name = obj["name"].toString().trimmed();
+        QString url = obj["url"].toString().trimmed();
         bool autoReconnect = obj.contains("autoReconnect") ? obj["autoReconnect"].toBool() : true;
         if (name.isEmpty() || url.isEmpty()) continue;
+        if (!ConnectionDialog::isRtspUrlAllowed(url)) {
+            appendLog(QString("Channel skipped: invalid RTSP URL (%1)").arg(name), LogLevel::WARN);
+            continue;
+        }
 
         auto *viewer = createViewer(name, url, autoReconnect);
         int gridIndex = obj.contains("gridIndex") ? obj["gridIndex"].toInt(-1) : -1;
@@ -2030,7 +2238,7 @@ void MainWindow::updateGridCellSizes()
             clearGridCell(cell);
             auto *label = new QLabel("No Stream", cell);
             label->setAlignment(Qt::AlignCenter);
-            label->setStyleSheet("color: #444; font-size: 13px; background: transparent;");
+            label->setStyleSheet("color: #777; font-size: 13px; background: transparent;");
             label->setAcceptDrops(true);
             label->installEventFilter(this);
             layout->addWidget(label);
@@ -2095,10 +2303,10 @@ void MainWindow::setupFilesTab(QWidget *parent)
         btn->setCheckable(true);
         btn->setFixedHeight(28);
         btn->setStyleSheet(
-            "QPushButton { color: #888; background-color: #222; border: 1px solid #444; "
+            "QPushButton { color: #333; background-color: #ffffff; border: 1px solid #bdbdbd; "
             "border-radius: 3px; font-size: 11px; padding: 0 12px; }"
-            "QPushButton:checked { color: white; background-color: #335; border-color: #4a9eff; }"
-            "QPushButton:hover { background-color: #2a2a2a; }");
+            "QPushButton:checked { color: #111; background-color: #cfe8ff; border-color: #0078d4; }"
+            "QPushButton:hover { background-color: #e8f2ff; }");
         m_fileTypeGroup->addButton(btn, i);
         typeLayout->addWidget(btn);
         if (i == 0) btn->setChecked(true);
@@ -2106,9 +2314,9 @@ void MainWindow::setupFilesTab(QWidget *parent)
     typeLayout->addStretch();
 
     const QString iconBtnStyle =
-        "QPushButton { color: #aaa; background-color: #222; border: 1px solid #444; "
+        "QPushButton { color: #333; background-color: #ffffff; border: 1px solid #bdbdbd; "
         "border-radius: 3px; font-size: 13px; }"
-        "QPushButton:hover { background-color: #2a2a2a; }";
+        "QPushButton:hover { background-color: #e8f2ff; border-color: #0078d4; }";
 
     auto *refreshBtn = new QPushButton("↻", parent);
     refreshBtn->setFixedSize(28, 28);
@@ -2140,11 +2348,11 @@ void MainWindow::setupFilesTab(QWidget *parent)
     m_filesList->setTextElideMode(Qt::ElideNone);
     m_filesList->setResizeMode(QListView::Adjust);
     m_filesList->setStyleSheet(
-        "QListWidget { background-color: #1a1a1a; color: #ccc; border: 1px solid #333; "
+        "QListWidget { background-color: #ffffff; color: #222; border: 1px solid #d0d0d0; "
         "font-size: 11px; outline: none; }"
-        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #222; }"
-        "QListWidget::item:selected { background-color: #2a3a5a; color: white; }"
-        "QListWidget::item:hover { background-color: #222; }");
+        "QListWidget::item { padding: 10px 8px; border-bottom: 1px solid #e5e5e5; }"
+        "QListWidget::item:selected { background-color: #cfe8ff; color: #111; }"
+        "QListWidget::item:hover { background-color: #f3f8ff; }");
     m_filesList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_filesList, &QListWidget::itemDoubleClicked,
             this, &MainWindow::openFilesListItem);
@@ -2180,12 +2388,12 @@ static QIcon makeVideoThumb(const QSize &target)
 {
     // 필름 스트립 스타일의 플레이스홀더
     QPixmap pm(target);
-    pm.fill(QColor("#2a2a2a"));
+    pm.fill(QColor("#e5e5e5"));
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing);
 
     // 필름 스트립 양옆 구멍
-    p.setBrush(QColor("#111"));
+    p.setBrush(QColor("#bdbdbd"));
     p.setPen(Qt::NoPen);
     int h = target.height();
     int w = target.width();
@@ -2196,7 +2404,7 @@ static QIcon makeVideoThumb(const QSize &target)
     }
 
     // 중앙 플레이 삼각형
-    p.setBrush(QColor("#8cb4ff"));
+    p.setBrush(QColor("#0078d4"));
     int cx = w / 2, cy = h / 2, r = h / 4;
     QPolygon tri;
     tri << QPoint(cx - r + 2, cy - r)

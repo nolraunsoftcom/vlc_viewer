@@ -3,6 +3,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QStringList>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
@@ -67,20 +68,23 @@ ChannelInfoDialog::ChannelInfoDialog(VlcWidget *viewer, QWidget *parent)
     setMinimumSize(560, 520);
     setWindowTitle(QStringLiteral("채널 정보"));
     setStyleSheet(
-        "QDialog { background-color: #1a1a1a; color: #ddd; }"
-        "QTabWidget::pane { border: 1px solid #333; background-color: #1a1a1a; }"
-        "QTabBar::tab { background-color: #222; color: #aaa; padding: 7px 18px; }"
-        "QTabBar::tab:selected { background-color: #1a1a1a; color: white; border-bottom: 2px solid #4a9eff; }"
-        "QTreeWidget { background-color: #181818; color: #ddd; border: none; alternate-background-color: #202020; }"
+        "QDialog { background-color: #ffffff; color: #222; }"
+        "QTabWidget::pane { border: 1px solid #d0d0d0; background-color: #ffffff; }"
+        "QTabWidget::tab-bar { left: 0px; }"
+        "QTabBar::tab { background-color: #f3f3f3; color: #555; padding: 7px 18px; }"
+        "QTabBar::tab:selected { background-color: #ffffff; color: #111; border-bottom: 2px solid #0078d4; }"
+        "QTreeWidget { background-color: #ffffff; color: #222; border: none; alternate-background-color: #f7f7f7; }"
         "QTreeWidget::item { padding: 3px 2px; }"
-        "QHeaderView::section { background-color: #222; color: #aaa; border: none; padding: 5px; }"
-        "QLabel { color: #aaa; background-color: transparent; }");
+        "QHeaderView::section { background-color: #f3f3f3; color: #333; border: none; padding: 5px; }"
+        "QLabel { color: #333; background-color: transparent; }");
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(10, 10, 10, 10);
     layout->setSpacing(8);
 
     auto *tabs = new QTabWidget(this);
+    tabs->tabBar()->setExpanding(false);
+    tabs->tabBar()->setDocumentMode(true);
     auto *statsPage = new QWidget(tabs);
     auto *statsLayout = new QVBoxLayout(statsPage);
     statsLayout->setContentsMargins(0, 0, 0, 0);

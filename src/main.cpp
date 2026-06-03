@@ -37,6 +37,13 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
         msgStr.contains("late buffer for mux input") ||
         msgStr.contains("buffer deadlock prevented") ||
         msgStr.contains("cannot peek") ||
+        msgStr.contains("no more input streams for this mux") ||
+        msgStr.contains("Missing video bitrate") ||
+        msgStr.contains("Failed to teardown RTSP session") ||
+        msgStr.contains("Cseq mismatch") ||
+        msgStr.contains("only real/helix rtsp servers supported for now") ||
+        msgStr.contains("Your input can't be opened") ||
+        msgStr.contains("VLC is unable to open the MRL") ||
         msgStr.contains("sout_AccessOutWrite")) {
         return;
     }
@@ -55,6 +62,9 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("영상관리시스템"));
     app.setApplicationDisplayName(QStringLiteral("영상관리시스템"));
     app.setWindowIcon(QIcon(":/logo.png"));
+    app.setStyleSheet(
+        "QToolTip { color: #1f1f1f; background-color: #ffffe1; "
+        "border: 1px solid #767676; padding: 3px; }");
 
     QString pluginPath;
     const QDir appDir(QApplication::applicationDirPath());
@@ -81,10 +91,11 @@ int main(int argc, char *argv[])
     // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
     std::vector<const char *> vlcArgs = {
         "--reset-plugins-cache",
-        "--network-caching=500",
-        "--live-caching=500",
+        "--network-caching=200",
+        "--live-caching=200",
         "--clock-jitter=0",
         "--clock-synchro=0",
+        "--drop-late-frames",
         "--avcodec-hurry-up",
         "--avcodec-fast",
         "--no-audio",

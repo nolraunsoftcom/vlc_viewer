@@ -101,8 +101,7 @@ mkdir build && cd build
 
 cmake .. -G "Visual Studio 17 2022" -A x64 ^
   -DCMAKE_PREFIX_PATH=C:\Qt\6.11.0\msvc2022_64 ^
-  -DVLC_INCLUDE_DIR=C:\vlc-sdk\include ^
-  -DVLC_LIB_DIR=C:\vlc-sdk\lib
+  -DVLC_DIR=C:\vlc-sdk
 
 cmake --build . --config Release
 ```
@@ -138,22 +137,10 @@ make -j$(nproc)
 
 ## 크로스 플랫폼 빌드 참고
 
-CMakeLists.txt에서 VLC 경로를 플랫폼별로 분기하려면:
+CMakeLists.txt는 플랫폼별 `VLC_DIR` 기본값을 사용한다. 필요하면 configure 단계에서 직접 지정한다:
 
-```cmake
-# macOS
-if(APPLE)
-    set(VLC_INCLUDE_DIR "/Applications/VLC.app/Contents/MacOS/include")
-    set(VLC_LIB_DIR "/Applications/VLC.app/Contents/MacOS/lib")
-# Windows
-elseif(WIN32)
-    set(VLC_INCLUDE_DIR "C:/vlc-sdk/include")
-    set(VLC_LIB_DIR "C:/vlc-sdk/lib")
-# Linux
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(VLC REQUIRED libvlc)
-endif()
+```bash
+cmake .. -DVLC_DIR=/path/to/vlc-root
 ```
 
 ---

@@ -5,16 +5,18 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QDialogButtonBox>
+#include <QUrl>
 
 static const QString DIALOG_STYLE = R"(
 QDialog {
-    background-color: #2a2a2a;
+    background-color: #ffffff;
 }
 QGroupBox {
-    color: #888;
-    border: 1px solid #444;
+    color: #333;
+    border: 1px solid #d0d0d0;
     border-radius: 4px;
     margin-top: 8px;
     padding-top: 8px;
@@ -27,75 +29,74 @@ QGroupBox::title {
     left: 8px;
 }
 QLabel {
-    color: #ccc;
+    color: #222;
     font-size: 12px;
 }
 QLineEdit {
-    background-color: #1a1a1a;
-    border: 1px solid #444;
-    color: white;
+    background-color: #ffffff;
+    border: 1px solid #bdbdbd;
+    color: #222;
     padding: 4px 6px;
     border-radius: 3px;
     font-size: 12px;
 }
 QLineEdit:focus {
-    border-color: #4a9eff;
+    border-color: #0078d4;
 }
 QLineEdit:disabled {
-    background-color: #222;
-    color: #555;
-    border-color: #333;
+    background-color: #f3f3f3;
+    color: #999;
+    border-color: #d0d0d0;
 }
 QSpinBox {
-    background-color: #1a1a1a;
-    border: 1px solid #444;
-    color: white;
+    background-color: #ffffff;
+    border: 1px solid #bdbdbd;
+    color: #222;
     padding: 4px 6px;
     border-radius: 3px;
     font-size: 12px;
 }
 QSpinBox:disabled {
-    background-color: #222;
-    color: #555;
-    border-color: #333;
+    background-color: #f3f3f3;
+    color: #999;
+    border-color: #d0d0d0;
 }
 QCheckBox {
-    color: #ccc;
+    color: #222;
     font-size: 12px;
 }
 QCheckBox::indicator {
     width: 14px;
     height: 14px;
-    background-color: #1a1a1a;
-    border: 1px solid #444;
+    background-color: #ffffff;
+    border: 1px solid #bdbdbd;
     border-radius: 2px;
 }
+QCheckBox::indicator:hover {
+    border-color: #0078d4;
+}
 QCheckBox::indicator:checked {
-    background-color: #4a9eff;
-    border-color: #4a9eff;
-    border-width: 2px;
-    border-style: solid;
-    border-top: none;
-    border-right: none;
-    width: 10px;
-    height: 6px;
-    border-radius: 0px;
-    background-color: transparent;
-    border-color: white;
+    background-color: #0078d4;
+    border-color: #0078d4;
+}
+QCheckBox::indicator:disabled {
+    background-color: #f3f3f3;
+    border-color: #d0d0d0;
 }
 QPushButton {
-    color: white;
-    background-color: #444;
-    border: 1px solid #555;
+    color: #222;
+    background-color: #f7f7f7;
+    border: 1px solid #bdbdbd;
     padding: 5px 16px;
     font-size: 12px;
     border-radius: 3px;
 }
 QPushButton:hover {
-    background-color: #555;
+    background-color: #e8f2ff;
+    border-color: #0078d4;
 }
 QPushButton:default {
-    border-color: #4a9eff;
+    border-color: #0078d4;
 }
 )";
 
@@ -162,7 +163,7 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
     buttonBox->button(QDialogButtonBox::Ok)->setText("확인");
     buttonBox->button(QDialogButtonBox::Cancel)->setText("취소");
 
-    connect(buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttonBox, &QDialogButtonBox::accepted, this, &ConnectionDialog::accept);
     connect(buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     mainLayout->addWidget(buttonBox);
@@ -171,10 +172,43 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
 ConnectionInfo ConnectionDialog::result() const
 {
     return ConnectionInfo{
-        m_channelName->text(),
-        m_rtspUrl->text(),
+        m_channelName->text().trimmed(),
+        m_rtspUrl->text().trimmed(),
         m_autoReconnect->isChecked()
     };
+}
+
+bool ConnectionDialog::isRtspUrlAllowed(const QString &url)
+{
+    const QUrl parsed(url.trimmed(), QUrl::StrictMode);
+    const QString scheme = parsed.scheme().toLower();
+    return parsed.isValid()
+        && (scheme == QStringLiteral("rtsp") || scheme == QStringLiteral("rtsps"))
+        && !parsed.host().isEmpty();
+}
+
+void ConnectionDialog::accept()
+{
+    const ConnectionInfo info = result();
+    if (info.channelName.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("채널 정보"),
+                             QStringLiteral("채널 이름을 입력하세요."));
+        m_channelName->setFocus();
+        return;
+    }
+
+    if (!isRtspUrlAllowed(info.rtspUrl)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("RTSP URL"),
+            QStringLiteral("RTSP URL은 rtsp:// 또는 rtsps:// 형식으로 입력하세요."));
+        m_rtspUrl->setFocus();
+        return;
+    }
+
+    m_channelName->setText(info.channelName);
+    m_rtspUrl->setText(info.rtspUrl);
+    QDialog::accept();
 }
 
 std::optional<ConnectionInfo> ConnectionDialog::getConnectionInfo(QWidget *parent, int channelNumber)

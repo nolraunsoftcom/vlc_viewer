@@ -19,8 +19,6 @@ public:
 
 private:
     QLabel *m_streamLabel = nullptr;
-    QLabel *m_viewerCpuValueLabel = nullptr;
-    QLabel *m_viewerMemoryValueLabel = nullptr;
     QLabel *m_systemCpuValueLabel = nullptr;
     QLabel *m_systemMemoryValueLabel = nullptr;
     ResourceMonitor m_resourceMonitor;
