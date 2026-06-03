@@ -91,9 +91,9 @@ jobs:
           $vlcSrcHash = "24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0"
 
           Write-Host "Downloading VLC runtime..."
-          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o vlc-win64.zip $vlcBinUrl
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-win64.zip $vlcBinUrl
           Write-Host "Downloading VLC headers source..."
-          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o vlc-src.tar.xz $vlcSrcUrl
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-src.tar.xz $vlcSrcUrl
 
           if ((Get-FileHash vlc-win64.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
             throw "Downloaded VLC runtime checksum mismatch"
@@ -110,8 +110,8 @@ jobs:
 
           Write-Host "Extracting VLC runtime..."
           Expand-Archive -Path vlc-win64.zip -DestinationPath C:\vlc-sdk -Force
-          Write-Host "Extracting VLC source headers..."
-          tar -xf vlc-src.tar.xz -C C:\vlc-src
+          Write-Host "Extracting VLC source headers only..."
+          tar -xf vlc-src.tar.xz -C C:\vlc-src vlc-3.0.21/include/vlc
 
           $runtimeRoot = Get-ChildItem C:\vlc-sdk -Directory | Select-Object -First 1
           if (-not $runtimeRoot) {
@@ -121,13 +121,13 @@ jobs:
           Get-ChildItem $runtimeRoot.FullName -Force | Move-Item -Destination C:\vlc-sdk -Force
           Remove-Item $runtimeRoot.FullName -Recurse -Force
 
-          $sourceRoot = Get-ChildItem C:\vlc-src -Directory | Select-Object -First 1
-          if (-not $sourceRoot) {
-            throw "Expanded VLC source directory not found"
+          $headersRoot = "C:\vlc-src\vlc-3.0.21\include\vlc"
+          if (-not (Test-Path $headersRoot)) {
+            throw "Extracted VLC headers directory not found"
           }
 
           New-Item -ItemType Directory -Path C:\vlc-sdk\include | Out-Null
-          Copy-Item -Path (Join-Path $sourceRoot.FullName "include\vlc") `
+          Copy-Item -Path $headersRoot `
             -Destination C:\vlc-sdk\include -Recurse -Force
 
           @(
