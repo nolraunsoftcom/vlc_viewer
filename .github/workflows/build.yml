@@ -71,8 +71,17 @@ jobs:
           arch: win64_msvc2022_64
           modules: qtmultimedia
 
+      - name: Cache VLC SDK
+        id: cache-vlc
+        uses: actions/cache@v4
+        with:
+          path: C:\vlc-sdk
+          key: vlc-sdk-windows-3.0.21-a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843-24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0
+
       - name: Download VLC runtime and headers
+        if: steps.cache-vlc.outputs.cache-hit != 'true'
         shell: pwsh
+        timeout-minutes: 15
         run: |
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
@@ -81,8 +90,10 @@ jobs:
           $vlcSrcUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/vlc-3.0.21.tar.xz"
           $vlcSrcHash = "24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0"
 
-          Invoke-WebRequest -Uri $vlcBinUrl -OutFile vlc-win64.zip
-          Invoke-WebRequest -Uri $vlcSrcUrl -OutFile vlc-src.tar.xz
+          Write-Host "Downloading VLC runtime..."
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o vlc-win64.zip $vlcBinUrl
+          Write-Host "Downloading VLC headers source..."
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o vlc-src.tar.xz $vlcSrcUrl
 
           if ((Get-FileHash vlc-win64.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
             throw "Downloaded VLC runtime checksum mismatch"
@@ -97,7 +108,9 @@ jobs:
           New-Item -ItemType Directory -Path C:\vlc-sdk | Out-Null
           New-Item -ItemType Directory -Path C:\vlc-src | Out-Null
 
+          Write-Host "Extracting VLC runtime..."
           Expand-Archive -Path vlc-win64.zip -DestinationPath C:\vlc-sdk -Force
+          Write-Host "Extracting VLC source headers..."
           tar -xf vlc-src.tar.xz -C C:\vlc-src
 
           $runtimeRoot = Get-ChildItem C:\vlc-sdk -Directory | Select-Object -First 1
@@ -138,6 +151,20 @@ jobs:
             throw "libVLC headers not found under C:\vlc-sdk"
           }
 
+      - name: Validate VLC SDK
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path C:\vlc-sdk\libvlc.dll)) {
+            throw "libVLC runtime not found under C:\vlc-sdk"
+          }
+          if (-not (Test-Path C:\vlc-sdk\include\vlc\vlc.h)) {
+            throw "libVLC headers not found under C:\vlc-sdk"
+          }
+          if (-not (Test-Path C:\vlc-sdk\plugins)) {
+            throw "VLC plugins directory not found under C:\vlc-sdk"
+          }
+
       - name: Build
         shell: cmd
         run: |
@@ -149,6 +176,7 @@ jobs:
           )
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64
           if errorlevel 1 exit /b 1
+          if not exist C:\vlc-sdk\lib mkdir C:\vlc-sdk\lib
           powershell -NoProfile -Command ^
             "$ErrorActionPreference = 'Stop';" ^
             "$exports = (& dumpbin /exports C:\vlc-sdk\libvlc.dll) |" ^
