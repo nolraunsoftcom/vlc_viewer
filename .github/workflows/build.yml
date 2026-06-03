@@ -76,9 +76,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\vlc-sdk
-          key: vlc-sdk-windows-3.0.21-a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843-24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0
+          key: vlc-sdk-windows-3.0.21-a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843-runtime-sdk
 
-      - name: Download VLC runtime and headers
+      - name: Download VLC runtime and SDK
         if: steps.cache-vlc.outputs.cache-hit != 'true'
         shell: pwsh
         timeout-minutes: 15
@@ -87,68 +87,34 @@ jobs:
           $ProgressPreference = "SilentlyContinue"
           $vlcBinUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/win64/vlc-3.0.21-win64.zip"
           $vlcBinHash = "a0b7ec02b50adf6417eed014fb8df50af39690505a4225b85b3dc2ed17d14843"
-          $vlcSrcUrl = "https://download.videolan.org/pub/videolan/vlc/3.0.21/vlc-3.0.21.tar.xz"
-          $vlcSrcHash = "24dbbe1d7dfaeea0994d5def0bbde200177347136dbfe573f5b6a4cee25afbb0"
 
-          Write-Host "Downloading VLC runtime..."
+          Write-Host "Downloading VLC runtime and SDK..."
           curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-win64.zip $vlcBinUrl
-          Write-Host "Downloading VLC headers source..."
-          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 --speed-time 60 --speed-limit 1024 -o vlc-src.tar.xz $vlcSrcUrl
 
           if ((Get-FileHash vlc-win64.zip -Algorithm SHA256).Hash.ToLower() -ne $vlcBinHash) {
-            throw "Downloaded VLC runtime checksum mismatch"
-          }
-
-          if ((Get-FileHash vlc-src.tar.xz -Algorithm SHA256).Hash.ToLower() -ne $vlcSrcHash) {
-            throw "Downloaded VLC source checksum mismatch"
+            throw "Downloaded VLC archive checksum mismatch"
           }
 
           Remove-Item C:\vlc-sdk -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item C:\vlc-src -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path C:\vlc-sdk | Out-Null
-          New-Item -ItemType Directory -Path C:\vlc-src | Out-Null
 
-          Write-Host "Extracting VLC runtime..."
+          Write-Host "Extracting VLC archive..."
           Expand-Archive -Path vlc-win64.zip -DestinationPath C:\vlc-sdk -Force
-          Write-Host "Extracting VLC source headers only..."
-          tar -xf vlc-src.tar.xz -C C:\vlc-src vlc-3.0.21/include/vlc
 
           $runtimeRoot = Get-ChildItem C:\vlc-sdk -Directory | Select-Object -First 1
           if (-not $runtimeRoot) {
-            throw "Expanded VLC runtime directory not found"
+            throw "Expanded VLC archive directory not found"
           }
 
+          Write-Host "Flattening VLC archive..."
           Get-ChildItem $runtimeRoot.FullName -Force | Move-Item -Destination C:\vlc-sdk -Force
           Remove-Item $runtimeRoot.FullName -Recurse -Force
 
-          $headersRoot = "C:\vlc-src\vlc-3.0.21\include\vlc"
-          if (-not (Test-Path $headersRoot)) {
-            throw "Extracted VLC headers directory not found"
+          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
+            throw "libVLC headers not found under C:\vlc-sdk\sdk"
           }
-
-          New-Item -ItemType Directory -Path C:\vlc-sdk\include | Out-Null
-          Copy-Item -Path $headersRoot `
-            -Destination C:\vlc-sdk\include -Recurse -Force
-
-          @(
-            '#ifndef LIBVLC_VERSION_H'
-            '# define LIBVLC_VERSION_H 1'
-            '# define LIBVLC_VERSION_MAJOR    (3)'
-            '# define LIBVLC_VERSION_MINOR    (0)'
-            '# define LIBVLC_VERSION_REVISION (21)'
-            '# define LIBVLC_VERSION_EXTRA    (0)'
-            '# define LIBVLC_VERSION(maj,min,rev,extra) \'
-            '         ((maj << 24) | (min << 16) | (rev << 8) | (extra))'
-            '# define LIBVLC_VERSION_INT \'
-            '         LIBVLC_VERSION(LIBVLC_VERSION_MAJOR, LIBVLC_VERSION_MINOR, \'
-            '                        LIBVLC_VERSION_REVISION, LIBVLC_VERSION_EXTRA)'
-            '#endif'
-          ) | Set-Content -Path C:\vlc-sdk\include\vlc\libvlc_version.h -Encoding ASCII
-
-          New-Item -ItemType Directory -Path C:\vlc-sdk\lib | Out-Null
-
-          if (-not (Test-Path C:\vlc-sdk\include\vlc\vlc.h)) {
-            throw "libVLC headers not found under C:\vlc-sdk"
+          if (-not (Test-Path C:\vlc-sdk\sdk\lib\libvlc.lib)) {
+            throw "libVLC import library not found under C:\vlc-sdk\sdk"
           }
 
       - name: Validate VLC SDK
@@ -158,8 +124,11 @@ jobs:
           if (-not (Test-Path C:\vlc-sdk\libvlc.dll)) {
             throw "libVLC runtime not found under C:\vlc-sdk"
           }
-          if (-not (Test-Path C:\vlc-sdk\include\vlc\vlc.h)) {
-            throw "libVLC headers not found under C:\vlc-sdk"
+          if (-not (Test-Path C:\vlc-sdk\sdk\include\vlc\vlc.h)) {
+            throw "libVLC headers not found under C:\vlc-sdk\sdk"
+          }
+          if (-not (Test-Path C:\vlc-sdk\sdk\lib\libvlc.lib)) {
+            throw "libVLC import library not found under C:\vlc-sdk\sdk"
           }
           if (-not (Test-Path C:\vlc-sdk\plugins)) {
             throw "VLC plugins directory not found under C:\vlc-sdk"
@@ -176,21 +145,8 @@ jobs:
           )
           call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64
           if errorlevel 1 exit /b 1
-          if not exist C:\vlc-sdk\lib mkdir C:\vlc-sdk\lib
-          powershell -NoProfile -Command ^
-            "$ErrorActionPreference = 'Stop';" ^
-            "$exports = (& dumpbin /exports C:\vlc-sdk\libvlc.dll) |" ^
-            "  Select-String '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+([^\s=]+)' |" ^
-            "  ForEach-Object { $_.Matches[0].Groups[1].Value } |" ^
-            "  Sort-Object -Unique;" ^
-            "if (-not $exports) { throw 'Failed to extract exports from libvlc.dll' };" ^
-            "@('LIBRARY libvlc', 'EXPORTS') + $exports |" ^
-            "  Set-Content -Path C:\vlc-sdk\lib\libvlc.def -Encoding ASCII"
-          if errorlevel 1 exit /b 1
-          lib /def:C:\vlc-sdk\lib\libvlc.def /machine:x64 /out:C:\vlc-sdk\lib\libvlc.lib
-          if errorlevel 1 exit /b 1
-          if not exist C:\vlc-sdk\lib\libvlc.lib (
-            echo libVLC import library was not generated.
+          if not exist C:\vlc-sdk\sdk\lib\libvlc.lib (
+            echo libVLC import library was not found.
             exit /b 1
           )
           mkdir build && cd build
