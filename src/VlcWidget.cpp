@@ -136,9 +136,10 @@ libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
 {
     auto *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
     if (!media) return nullptr;
-    libvlc_media_add_option(media, ":rtsp-tcp");
-    libvlc_media_add_option(media, ":network-caching=500");
-    libvlc_media_add_option(media, ":live-caching=500");
+    // 의견#2: UDP 사용 (:rtsp-tcp 미지정 = VLC 순정 기본값 UDP) — 음영지역 재연결 복구 단축.
+    // TCP 로 되돌리려면 아래에 libvlc_media_add_option(media, ":rtsp-tcp"); 한 줄 추가.
+    libvlc_media_add_option(media, ":network-caching=1000");  // 의견#5
+    libvlc_media_add_option(media, ":live-caching=1000");
     libvlc_media_add_option(media, ":no-audio");
     libvlc_media_add_option(media, ":audio-track=-1");
     return media;
@@ -574,6 +575,7 @@ void VlcWidget::refreshStats(qint64 nowMs)
     if (!m_player || !s.playing) {
         m_stats = s;
         m_hasStatsSample = false;
+        m_lateStreakSamples = 0;
         return;
     }
 
@@ -625,6 +627,37 @@ void VlcWidget::refreshStats(qint64 nowMs)
     }
 
     m_stats = s;
+    maybeFlushForLatency(nowMs, s);
+}
+
+void VlcWidget::maybeFlushForLatency(qint64 nowMs, const Stats &s)
+{
+    // 연결 상태에서만 동작 (Connecting/Reconnecting 중엔 streak 리셋)
+    if (m_status != Status::Connected) {
+        m_lateStreakSamples = 0;
+        return;
+    }
+
+    // "늦은 프레임이 지속적으로 드롭" = 밀림 고착 추정 신호.
+    // (UDP 에선 demux discontinuity 가 정상적으로도 잦으므로 lost_pictures 만 신호로 사용)
+    const bool badSecond = s.valid && s.lost_delta > 0;
+    if (!badSecond) {
+        m_lateStreakSamples = 0;
+        return;
+    }
+
+    if (++m_lateStreakSamples < WATCHDOG_LATE_STREAK) return;
+    if (m_lastWatchdogFlushMs != 0 && nowMs - m_lastWatchdogFlushMs < WATCHDOG_MIN_INTERVAL_MS) return;
+
+    m_lastWatchdogFlushMs = nowMs;
+    m_lateStreakSamples = 0;
+    log(QString("[%1] 지연 누적 감지 → 스트림 flush(재접속)").arg(m_name), 2);
+
+    // stats 루프(클럭 타이머) 밖에서 실행 — player 교체의 블로킹 정리를 루프 안에서 피함
+    QPointer<VlcWidget> self(this);
+    QTimer::singleShot(0, this, [self]() {
+        if (self) self->reconnect();
+    });
 }
 
 VlcWidget::Stats VlcWidget::getStats() const

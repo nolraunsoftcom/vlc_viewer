@@ -151,6 +151,14 @@ private:
     int m_lastDemuxCorrupted = 0;
     int m_lastDemuxDiscontinuity = 0;
 
+    // 지연 누적 워치독 — 무선 음영지역에서 밀림이 고착될 때 stream 을 flush(재접속)해 회복.
+    // 옵션 정상화(clock 재동기화 복원) 후에도 RF 하드 드롭으로 고착되는 드문 경우용 2차 안전망.
+    int m_lateStreakSamples = 0;          // 늦은 프레임 드롭이 연속된 초(스탯 1Hz)
+    qint64 m_lastWatchdogFlushMs = 0;     // 마지막 워치독 flush 시각 (레이트리밋)
+    static const int WATCHDOG_LATE_STREAK = 10;        // 10초 연속 드롭 지속 시 flush
+    static const int WATCHDOG_MIN_INTERVAL_MS = 60000; // 최소 60초 간격
+    void maybeFlushForLatency(qint64 nowMs, const Stats &s);
+
     std::function<void(const QString &, int)> m_logCallback;
     void log(const QString &msg, int level = 1);
     void resetStatsCache();

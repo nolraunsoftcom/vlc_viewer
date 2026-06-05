@@ -16,7 +16,8 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
     if (!g_mainWindow) return;
 
     // VLC 레벨: 0=DEBUG, 2=NOTICE, 3=WARNING, 4=ERROR
-    if (level < LIBVLC_WARNING) return;
+    // 의견#1: WARNING 숨김, ERROR 만 표시
+    if (level < LIBVLC_ERROR) return;
 
     char buf[512];
     vsnprintf(buf, sizeof(buf), fmt, args);
@@ -49,7 +50,7 @@ static void vlcLogCallback(void *, int level, const libvlc_log_t *, const char *
         return;
     }
 
-    LogLevel logLevel = (level >= LIBVLC_ERROR) ? LogLevel::ERROR : LogLevel::WARN;
+    LogLevel logLevel = LogLevel::ERROR;  // 위 필터로 ERROR 만 통과
     QString msg = QString("VLC: %1").arg(QString::fromUtf8(buf).trimmed());
 
     QMetaObject::invokeMethod(g_mainWindow, [=]() {
@@ -89,17 +90,16 @@ int main(int argc, char *argv[])
         qputenv("VLC_PLUGIN_PATH", QDir::toNativeSeparators(pluginPath).toUtf8());
     }
 
-    // VLC 인스턴스 생성 (저지연 RTSP/H.265 튜닝)
+    // VLC 인스턴스 생성 — 의견#3(순정 지향) 기준.
+    // 제거: --clock-jitter=0 / --clock-synchro=0 (지터보상·재동기화를 꺼서 지연이 단조
+    //       누적되고 한번 밀리면 고착되던 주범. 순정 기본값으로 복원), --avcodec-hurry-up /
+    //       --avcodec-fast (화질저하 트레이드오프, 비순정).
     std::vector<const char *> vlcArgs = {
         "--reset-plugins-cache",
-        "--network-caching=500",
-        "--live-caching=500",
-        "--clock-jitter=0",
-        "--clock-synchro=0",
-        "--drop-late-frames",
-        "--avcodec-hurry-up",
-        "--avcodec-fast",
-        "--no-audio",
+        "--network-caching=1000",   // 의견#5: 무선 깨짐 방지용 캐시 상향
+        "--live-caching=1000",
+        "--drop-late-frames",       // 늦은 프레임은 버려 지연 누적 차단 (순정도 사용하는 레버)
+        "--no-audio",               // 의견#4: 오디오 미사용
     };
 #if defined(__APPLE__)
     vlcArgs.push_back("--no-videotoolbox");

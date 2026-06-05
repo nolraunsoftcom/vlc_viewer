@@ -68,8 +68,8 @@
   "hotPaths": [
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 28,
-      "lastAccessed": 1776760975315,
+      "accessCount": 29,
+      "lastAccessed": 1780666237301,
       "type": "file"
     },
     {
@@ -80,8 +80,14 @@
     },
     {
       "path": "src/main.cpp",
-      "accessCount": 7,
-      "lastAccessed": 1776757960387,
+      "accessCount": 11,
+      "lastAccessed": 1780670774062,
+      "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.cpp",
+      "accessCount": 9,
+      "lastAccessed": 1780670818981,
       "type": "file"
     },
     {
@@ -91,27 +97,21 @@
       "type": "file"
     },
     {
-      "path": "src/VlcWidget.cpp",
-      "accessCount": 5,
-      "lastAccessed": 1776760409677,
-      "type": "file"
-    },
-    {
       "path": "src",
       "accessCount": 3,
       "lastAccessed": 1776759957921,
       "type": "directory"
     },
     {
-      "path": "resources/logo.png",
-      "accessCount": 2,
-      "lastAccessed": 1776758210189,
+      "path": "src/VlcWidget.h",
+      "accessCount": 3,
+      "lastAccessed": 1780670798839,
       "type": "file"
     },
     {
-      "path": "src/VlcWidget.h",
-      "accessCount": 1,
-      "lastAccessed": 1776756450202,
+      "path": "resources/logo.png",
+      "accessCount": 2,
+      "lastAccessed": 1776758210189,
       "type": "file"
     },
     {
@@ -130,6 +130,18 @@
       "path": "resources/app.rc",
       "accessCount": 1,
       "lastAccessed": 1776760630070,
+      "type": "file"
+    },
+    {
+      "path": "src/ResourceMonitor.cpp",
+      "accessCount": 1,
+      "lastAccessed": 1780666237357,
+      "type": "file"
+    },
+    {
+      "path": "docs/2026-06-06-수정사항.md",
+      "accessCount": 1,
+      "lastAccessed": 1780672399805,
       "type": "file"
     }
   ],
