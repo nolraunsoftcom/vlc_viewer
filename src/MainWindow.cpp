@@ -46,6 +46,7 @@ static const int HEADER_HEIGHT = 32;
 static const QString HEADER_STYLE = "background-color: #f3f3f3; border-bottom: 1px solid #d0d0d0;";
 static const int MAX_LOG_LINES = 1000;
 static const int GRID_SPACING = 1;
+static const int GRID_CELL_HIGHLIGHT_INSET = 1;
 static const int VIEWER_INFO_BAR_HEIGHT = 28;
 static const int LEFT_PANEL_WIDTH = 200;
 static const int RIGHT_PANEL_WIDTH = 280;
@@ -55,7 +56,7 @@ static const char *VIEWER_DRAG_MIME = "application/x-ziilab-viewer-ptr";
 static const QString GRID_CELL_STYLE =
     "QFrame#gridCell { background-color: #ededed; border: none; }";
 static const QString GRID_CELL_HIGHLIGHT_STYLE =
-    "QFrame#gridCell { background-color: #ededed; border: 1px solid rgba(0, 120, 215, 180); }";
+    "QFrame#gridCell { background-color: #0078d4; border: none; }";
 
 namespace {
 
@@ -1862,6 +1863,17 @@ void MainWindow::setGridCellHighlighted(int index, bool highlighted)
 
     cell->setProperty("gridHighlighted", highlighted);
     cell->setStyleSheet(highlighted ? GRID_CELL_HIGHLIGHT_STYLE : GRID_CELL_STYLE);
+
+    if (auto *layout = qobject_cast<QVBoxLayout *>(cell->layout())) {
+        const int inset = highlighted ? GRID_CELL_HIGHLIGHT_INSET : 0;
+        layout->setContentsMargins(inset, inset, inset, inset);
+        if (layout->count() > 0) {
+            if (auto *content = layout->itemAt(0)->widget()) {
+                content->setFixedSize(qMax(1, cell->width() - inset * 2),
+                                      qMax(1, cell->height() - inset * 2));
+            }
+        }
+    }
 }
 
 bool MainWindow::isGridCellHighlighted(int index) const
@@ -2190,13 +2202,6 @@ void MainWindow::updateGridCellSizes()
 
     ensureGridCellCount(totalCells);
 
-    const QSize viewerSize(qMax(1, cellWidth), qMax(1, cellHeight));
-    for (auto *viewer : m_viewers) {
-        if (viewer->minimumSize() != viewerSize || viewer->maximumSize() != viewerSize) {
-            viewer->setFixedSize(viewerSize);
-        }
-    }
-
     const QSize cellSize(cellWidth, cellHeight);
     for (int i = 0; i < m_gridCells.size(); ++i) {
         auto *cell = m_gridCells[i];
@@ -2223,6 +2228,9 @@ void MainWindow::updateGridCellSizes()
 
         VlcWidget *viewer = occupied.value(i, nullptr);
         QWidget *current = layout->count() > 0 ? layout->itemAt(0)->widget() : nullptr;
+        const int inset = isGridCellHighlighted(i) ? GRID_CELL_HIGHLIGHT_INSET : 0;
+        const QSize contentSize(qMax(1, cellWidth - inset * 2),
+                                qMax(1, cellHeight - inset * 2));
 
         if (viewer) {
             if (current != viewer) {
@@ -2233,15 +2241,21 @@ void MainWindow::updateGridCellSizes()
                 viewer->setParent(cell);
                 layout->addWidget(viewer);
             }
+            if (viewer->minimumSize() != contentSize || viewer->maximumSize() != contentSize) {
+                viewer->setFixedSize(contentSize);
+            }
             viewer->show();
         } else if (!qobject_cast<QLabel *>(current)) {
             clearGridCell(cell);
             auto *label = new QLabel("No Stream", cell);
             label->setAlignment(Qt::AlignCenter);
-            label->setStyleSheet("color: #777; font-size: 13px; background: transparent;");
+            label->setStyleSheet("color: #777; font-size: 13px; background: #ededed;");
             label->setAcceptDrops(true);
             label->installEventFilter(this);
             layout->addWidget(label);
+            label->setFixedSize(contentSize);
+        } else if (current && (current->minimumSize() != contentSize || current->maximumSize() != contentSize)) {
+            current->setFixedSize(contentSize);
         }
 
         if (!cell->isVisible()) {
