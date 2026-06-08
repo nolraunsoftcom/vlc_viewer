@@ -1,4 +1,5 @@
 #include "ConnectionDialog.h"
+#include "MediaRelayManager.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -105,8 +106,11 @@ ConnectionDialog::ConnectionDialog(int channelNumber, QWidget *parent)
 {
     setupUi(ConnectionInfo{
         QString("Camera %1").arg(channelNumber),
-        "rtsp://10.1.100.30:8904/live",
-        true
+        "rtsp://169.254.4.1:8900/live",
+        true,
+        true,
+        "rtsp://169.254.4.1:8900/live",
+        QString("voxl%1").arg(channelNumber)
     }, "채널 추가");
 }
 
@@ -140,9 +144,12 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
     m_channelName->setMinimumWidth(300);
     channelForm->addRow("채널 이름:", m_channelName);
 
-    m_rtspUrl = new QLineEdit(initialInfo.rtspUrl, channelGroup);
+    const QString sourceUrl = initialInfo.sourceUrl.trimmed().isEmpty()
+        ? initialInfo.rtspUrl.trimmed()
+        : initialInfo.sourceUrl.trimmed();
+    m_rtspUrl = new QLineEdit(sourceUrl, channelGroup);
     m_rtspUrl->setMinimumWidth(300);
-    channelForm->addRow("RTSP URL:", m_rtspUrl);
+    channelForm->addRow("원본 RTSP URL:", m_rtspUrl);
 
     mainLayout->addWidget(channelGroup);
 
@@ -151,9 +158,40 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
     auto *optionsLayout = new QVBoxLayout(optionsGroup);
     optionsLayout->setContentsMargins(10, 16, 10, 10);
 
+    m_relayEnabled = new QCheckBox("MediaMTX relay 사용", optionsGroup);
+    m_relayEnabled->setChecked(initialInfo.relayEnabled);
+    optionsLayout->addWidget(m_relayEnabled);
+
+    auto *relayPathLayout = new QHBoxLayout();
+    relayPathLayout->setContentsMargins(0, 0, 0, 0);
+    relayPathLayout->setSpacing(8);
+
+    auto *relayPathLabel = new QLabel("Relay path:", optionsGroup);
+    relayPathLabel->setMinimumWidth(82);
+    relayPathLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    relayPathLayout->addWidget(relayPathLabel);
+
+    const QString relayPath = initialInfo.relayPath.trimmed().isEmpty()
+        ? QStringLiteral("voxl1")
+        : MediaRelayManager::normalizeRelayPath(initialInfo.relayPath);
+    m_relayPath = new QLineEdit(relayPath, optionsGroup);
+    m_relayPath->setPlaceholderText(QStringLiteral("voxl1"));
+    relayPathLayout->addWidget(m_relayPath, 1);
+    optionsLayout->addLayout(relayPathLayout);
+
     m_autoReconnect = new QCheckBox("자동 재연결", optionsGroup);
     m_autoReconnect->setChecked(initialInfo.autoReconnect);
     optionsLayout->addWidget(m_autoReconnect);
+
+    auto updateRelayUi = [this, relayPathLabel]() {
+        const bool enabled = m_relayEnabled && m_relayEnabled->isChecked();
+        if (m_relayPath) m_relayPath->setEnabled(enabled);
+        if (relayPathLabel) relayPathLabel->setEnabled(enabled);
+    };
+    connect(m_relayEnabled, &QCheckBox::toggled, this, [updateRelayUi](bool) {
+        updateRelayUi();
+    });
+    updateRelayUi();
 
     mainLayout->addWidget(optionsGroup);
 
@@ -171,10 +209,19 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
 
 ConnectionInfo ConnectionDialog::result() const
 {
+    const QString sourceUrl = m_rtspUrl->text().trimmed();
+    const bool relayEnabled = m_relayEnabled && m_relayEnabled->isChecked();
+    const QString relayPath = m_relayPath
+        ? MediaRelayManager::normalizeRelayPath(m_relayPath->text())
+        : QString();
+
     return ConnectionInfo{
         m_channelName->text().trimmed(),
-        m_rtspUrl->text().trimmed(),
-        m_autoReconnect->isChecked()
+        sourceUrl,
+        m_autoReconnect->isChecked(),
+        relayEnabled,
+        sourceUrl,
+        relayPath
     };
 }
 
@@ -197,7 +244,7 @@ void ConnectionDialog::accept()
         return;
     }
 
-    if (!isRtspUrlAllowed(info.rtspUrl)) {
+    if (!isRtspUrlAllowed(info.sourceUrl)) {
         QMessageBox::warning(
             this,
             QStringLiteral("RTSP URL"),
@@ -206,8 +253,20 @@ void ConnectionDialog::accept()
         return;
     }
 
+    if (info.relayEnabled && !MediaRelayManager::isValidRelayPath(info.relayPath)) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("MediaMTX relay"),
+            QStringLiteral("Relay path는 영문/숫자/점/하이픈/밑줄만 사용할 수 있습니다."));
+        m_relayPath->setFocus();
+        return;
+    }
+
     m_channelName->setText(info.channelName);
-    m_rtspUrl->setText(info.rtspUrl);
+    m_rtspUrl->setText(info.sourceUrl);
+    if (m_relayPath) {
+        m_relayPath->setText(info.relayPath);
+    }
     QDialog::accept();
 }
 
@@ -216,7 +275,7 @@ std::optional<ConnectionInfo> ConnectionDialog::getConnectionInfo(QWidget *paren
     ConnectionDialog dlg(channelNumber, parent);
     if (dlg.exec() == QDialog::Accepted) {
         ConnectionInfo info = dlg.result();
-        if (!info.channelName.isEmpty() && !info.rtspUrl.isEmpty()) {
+        if (!info.channelName.isEmpty() && !info.sourceUrl.isEmpty()) {
             return info;
         }
     }
@@ -230,7 +289,7 @@ std::optional<ConnectionInfo> ConnectionDialog::getConnectionInfo(QWidget *paren
     ConnectionDialog dlg(initialInfo, windowTitle, parent);
     if (dlg.exec() == QDialog::Accepted) {
         ConnectionInfo info = dlg.result();
-        if (!info.channelName.isEmpty() && !info.rtspUrl.isEmpty()) {
+        if (!info.channelName.isEmpty() && !info.sourceUrl.isEmpty()) {
             return info;
         }
     }

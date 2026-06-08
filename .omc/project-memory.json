@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "lastScanned": 1776756437911,
+  "lastScanned": 1780933933782,
   "projectRoot": "/Users/ieonsang/nolsoft/ziilab/viewer",
   "techStack": {
     "languages": [
@@ -34,6 +34,7 @@
     "isMonorepo": false,
     "workspaces": [],
     "mainDirectories": [
+      "docs",
       "src"
     ],
     "gitBranches": null
@@ -44,104 +45,92 @@
       "path": "build",
       "purpose": "Build output",
       "fileCount": 3,
-      "lastAccessed": 1776756437904,
+      "lastAccessed": 1780933933775,
       "keyFiles": [
         "CMakeCache.txt",
         "Makefile",
         "cmake_install.cmake"
       ]
     },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 3,
+      "lastAccessed": 1780933933776,
+      "keyFiles": [
+        "2026-06-06-수정사항.md",
+        "voxl2-mini-viewer-improvement-plan.md",
+        "voxl2-rtsp-network-access.md"
+      ]
+    },
+    "resources": {
+      "path": "resources",
+      "purpose": null,
+      "fileCount": 5,
+      "lastAccessed": 1780933933776,
+      "keyFiles": [
+        "app.rc.in",
+        "logo.icns",
+        "logo.ico",
+        "logo.png",
+        "resources.qrc"
+      ]
+    },
     "src": {
       "path": "src",
       "purpose": "Source code",
-      "fileCount": 10,
-      "lastAccessed": 1776756437904,
+      "fileCount": 14,
+      "lastAccessed": 1780933933776,
       "keyFiles": [
+        "ChannelInfoDialog.cpp",
+        "ChannelInfoDialog.h",
         "ConnectionDialog.cpp",
         "ConnectionDialog.h",
-        "MainWindow.cpp",
-        "MainWindow.h",
-        "StatusBar.cpp"
+        "MainWindow.cpp"
       ]
     }
   },
   "hotPaths": [
     {
-      "path": "src/MainWindow.cpp",
-      "accessCount": 29,
-      "lastAccessed": 1780666237301,
+      "path": "docs/voxl2-mini-viewer-improvement-plan.md",
+      "accessCount": 1,
+      "lastAccessed": 1780933953277,
       "type": "file"
     },
     {
-      "path": "src/MainWindow.h",
-      "accessCount": 11,
-      "lastAccessed": 1776760014066,
-      "type": "file"
-    },
-    {
-      "path": "src/main.cpp",
-      "accessCount": 11,
-      "lastAccessed": 1780670774062,
+      "path": "src/VlcWidget.h",
+      "accessCount": 1,
+      "lastAccessed": 1780933968118,
       "type": "file"
     },
     {
       "path": "src/VlcWidget.cpp",
-      "accessCount": 9,
-      "lastAccessed": 1780670818981,
+      "accessCount": 1,
+      "lastAccessed": 1780933968373,
+      "type": "file"
+    },
+    {
+      "path": "src/MainWindow.cpp",
+      "accessCount": 1,
+      "lastAccessed": 1780933978849,
       "type": "file"
     },
     {
       "path": "CMakeLists.txt",
-      "accessCount": 6,
-      "lastAccessed": 1776760642948,
-      "type": "file"
-    },
-    {
-      "path": "src",
-      "accessCount": 3,
-      "lastAccessed": 1776759957921,
-      "type": "directory"
-    },
-    {
-      "path": "src/VlcWidget.h",
-      "accessCount": 3,
-      "lastAccessed": 1780670798839,
-      "type": "file"
-    },
-    {
-      "path": "resources/logo.png",
-      "accessCount": 2,
-      "lastAccessed": 1776758210189,
-      "type": "file"
-    },
-    {
-      "path": "resources/resources.qrc",
       "accessCount": 1,
-      "lastAccessed": 1776757581211,
+      "lastAccessed": 1780942326333,
       "type": "file"
     },
     {
-      "path": "",
+      "path": "src/MediaRelayManager.cpp",
       "accessCount": 1,
-      "lastAccessed": 1776760580381,
-      "type": "directory"
-    },
-    {
-      "path": "resources/app.rc",
-      "accessCount": 1,
-      "lastAccessed": 1776760630070,
+      "lastAccessed": 1780942326601,
       "type": "file"
     },
     {
-      "path": "src/ResourceMonitor.cpp",
+      "path": "src/MediaRelayManager.h",
       "accessCount": 1,
-      "lastAccessed": 1780666237357,
-      "type": "file"
-    },
-    {
-      "path": "docs/2026-06-06-수정사항.md",
-      "accessCount": 1,
-      "lastAccessed": 1780672399805,
+      "lastAccessed": 1780942357970,
       "type": "file"
     }
   ],

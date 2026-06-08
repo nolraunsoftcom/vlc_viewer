@@ -21,6 +21,7 @@
 class VlcWidget;
 class ChannelInfoDialog;
 class StatusBar;
+class MediaRelayManager;
 class QScrollArea;
 class QPushButton;
 class QFrame;
@@ -108,6 +109,7 @@ private:
     // 상태 바
     StatusBar *m_statusBar = nullptr;
     QFrame *m_toast = nullptr;
+    MediaRelayManager *m_relayManager = nullptr;
 
     // 헬퍼
     VlcWidget *createViewer(const QString &name, const QString &url, bool autoReconnect = true);
@@ -130,6 +132,10 @@ private:
     void editChannel(VlcWidget *viewer);
     void updateChannelTableRow(VlcWidget *viewer);
     void updateChannelStatsRows();
+    QString playUrlForConnection(const ConnectionInfo &info) const;
+    QString sourceUrlForConnection(const ConnectionInfo &info) const;
+    QString channelListUrlText(VlcWidget *viewer) const;
+    bool syncRelayManager();
     void showChannelInfo(VlcWidget *viewer);
     void closeChannelInfo(VlcWidget *viewer);
     void refreshChannelInfoDialogs();

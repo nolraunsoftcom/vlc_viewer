@@ -1,0 +1,39 @@
+logLevel: info
+logDestinations: [stdout]
+
+# Product relay prototype, validated against MediaMTX v1.19.x config keys.
+# Upstream VOXL2 Mini:
+#   rtsp://169.254.4.1:8900/live
+# Local viewer URL:
+#   rtsp://127.0.0.1:8554/voxl1
+#
+# Keep recording disabled here for the first migration step.
+# The current viewer can still record from the relayed RTSP URL.
+api: true
+apiAddress: 127.0.0.1:9997
+metrics: false
+pprof: false
+playback: false
+
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :8554
+
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+
+paths:
+  voxl1:
+    source: rtsp://169.254.4.1:8900/live
+    sourceOnDemand: false
+    rtspTransport: udp
+
+    record: false
+    recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+    recordFormat: fmp4
+    recordPartDuration: 1s
+    recordSegmentDuration: 15m
+    recordDeleteAfter: 0s

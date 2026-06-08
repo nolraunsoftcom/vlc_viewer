@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "ChannelInfoDialog.h"
+#include "MediaRelayManager.h"
 #include "VlcWidget.h"
 #include "StatusBar.h"
 #include "Style.h"
@@ -212,6 +213,11 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
 
     setCentralWidget(central);
 
+    m_relayManager = new MediaRelayManager(this);
+    connect(m_relayManager, &MediaRelayManager::logMessage, this, [this](const QString &message, int level) {
+        appendLog(message, static_cast<LogLevel>(qBound(0, level, 3)));
+    });
+
     m_clockTimer = new QTimer(this);
     connect(m_clockTimer, &QTimer::timeout, this, [this]() {
         QString timeStr = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss");
@@ -254,6 +260,10 @@ MainWindow::~MainWindow()
     for (auto *viewer : m_viewers) {
         viewer->stop();
     }
+
+    if (m_relayManager) {
+        m_relayManager->stop();
+    }
 }
 
 // ============================================================
@@ -283,6 +293,7 @@ VlcWidget *MainWindow::createViewer(const QString &name, const QString &url, boo
     });
     connect(viewer, &VlcWidget::requestRemove, this, [this](VlcWidget *v) {
         if (removeChannel(v)) {
+            syncRelayManager();
             renderChannelTable();
             saveChannels();
             refreshGridAfterChannelSetChanged();
@@ -388,7 +399,7 @@ void MainWindow::addChannelToTable(VlcWidget *viewer)
     topRow->addStretch();
     topRow->addWidget(statusLabel);
 
-    auto *urlLabel = new QLabel(viewer->url(), cellWidget);
+    auto *urlLabel = new QLabel(channelListUrlText(viewer), cellWidget);
     urlLabel->setObjectName("urlLabel");
     urlLabel->setStyleSheet("color: #666; font-size: 11px; background: transparent;");
     urlLabel->setTextInteractionFlags(Qt::NoTextInteraction);
@@ -983,11 +994,12 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         appendLog(msg, static_cast<LogLevel>(level));
     });
     connect(fullViewer, &VlcWidget::requestEdit, this, [this](VlcWidget *v) {
-        editChannel(v);
+        editChannel(v && v->sourceViewer() ? v->sourceViewer() : v);
     });
     connect(fullViewer, &VlcWidget::requestInfo, this, [this](VlcWidget *v) {
-        showChannelInfo(v);
+        showChannelInfo(v && v->sourceViewer() ? v->sourceViewer() : v);
     });
+    fullViewer->setStreamInfo(viewer->sourceUrl(), viewer->relayEnabled(), viewer->relayPath());
     fullViewer->play(viewer->url(), viewer->name());
 
     // 원본 녹화 상태를 복제본 UI 에 즉시 반영 (이후 전이는 시그널이 릴레이)
@@ -1070,6 +1082,9 @@ void MainWindow::saveChannels()
         QJsonObject obj;
         obj["name"] = viewer->name();
         obj["url"] = viewer->url();
+        obj["sourceUrl"] = viewer->sourceUrl();
+        obj["relayEnabled"] = viewer->relayEnabled();
+        obj["relayPath"] = viewer->relayPath();
         obj["autoReconnect"] = viewer->autoReconnect();
         obj["gridIndex"] = m_gridIndexes.contains(viewer)
             ? m_gridIndexes.value(viewer)
@@ -1121,27 +1136,54 @@ void MainWindow::loadChannels()
         arr = root["channels"].toArray();
     }
 
+    QVector<VlcWidget *> loadedViewers;
+
+    int channelNumber = 1;
     for (const auto &val : arr) {
         QJsonObject obj = val.toObject();
         QString name = obj["name"].toString().trimmed();
-        QString url = obj["url"].toString().trimmed();
+        QString legacyUrl = obj["url"].toString().trimmed();
+        QString sourceUrl = obj["sourceUrl"].toString().trimmed();
+        if (sourceUrl.isEmpty()) sourceUrl = legacyUrl;
+        const bool relayEnabled = obj["relayEnabled"].toBool(false);
+        QString relayPath = MediaRelayManager::normalizeRelayPath(obj["relayPath"].toString().trimmed());
+        if (relayEnabled && relayPath.isEmpty()) {
+            relayPath = QStringLiteral("voxl%1").arg(channelNumber);
+        }
+        const QString url = relayEnabled && m_relayManager
+            ? m_relayManager->playUrlForPath(relayPath)
+            : sourceUrl;
         bool autoReconnect = obj.contains("autoReconnect") ? obj["autoReconnect"].toBool() : true;
-        if (name.isEmpty() || url.isEmpty()) continue;
-        if (!ConnectionDialog::isRtspUrlAllowed(url)) {
+        if (name.isEmpty() || sourceUrl.isEmpty()) continue;
+        if (!ConnectionDialog::isRtspUrlAllowed(sourceUrl)) {
             appendLog(QString("Channel skipped: invalid RTSP URL (%1)").arg(name), LogLevel::WARN);
+            continue;
+        }
+        if (relayEnabled && !MediaRelayManager::isValidRelayPath(relayPath)) {
+            appendLog(QString("Channel skipped: invalid relay path (%1)").arg(name), LogLevel::WARN);
             continue;
         }
 
         auto *viewer = createViewer(name, url, autoReconnect);
+        viewer->setChannelInfo(name, url);
+        viewer->setStreamInfo(sourceUrl, relayEnabled, relayPath);
         int gridIndex = obj.contains("gridIndex") ? obj["gridIndex"].toInt(-1) : -1;
         if (gridIndex < 0 || viewerAtGridIndex(gridIndex) != nullptr) {
             gridIndex = firstFreeGridIndex();
         }
         m_gridIndexes.insert(viewer, gridIndex);
         m_channelListOrder.append(viewer);
-        viewer->play(url, name);
+        loadedViewers.append(viewer);
+        ++channelNumber;
+    }
+
+    syncRelayManager();
+
+    for (auto *viewer : loadedViewers) {
+        viewer->play(viewer->url(), viewer->name());
         addChannelToTable(viewer);
-        appendLog(QString("Channel loaded: %1").arg(name), LogLevel::DEBUG);
+        appendLog(QString("Channel loaded: %1 (%2)").arg(viewer->name(), channelListUrlText(viewer)),
+                  LogLevel::DEBUG);
     }
 
     if (!m_viewers.isEmpty()) rebuildGrid();
@@ -1157,16 +1199,21 @@ void MainWindow::addChannel()
     if (!info) return;
 
     const QString name = info->channelName;
-    const QString url  = info->rtspUrl;
+    const QString sourceUrl = sourceUrlForConnection(*info);
+    const QString relayPath = MediaRelayManager::normalizeRelayPath(info->relayPath);
+    const QString url = playUrlForConnection(*info);
 
     auto *viewer = createViewer(name, url, info->autoReconnect);
+    viewer->setChannelInfo(name, url);
+    viewer->setStreamInfo(sourceUrl, info->relayEnabled, relayPath);
     m_channelListOrder.append(viewer);
     m_gridIndexes.insert(viewer, firstFreeGridIndex());
+    syncRelayManager();
     viewer->play(url, name);
     addChannelToTable(viewer);
     selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier, false);
 
-    appendLog(QString("Channel added: %1 (%2)").arg(name, url), LogLevel::INFO);
+    appendLog(QString("Channel added: %1 (%2)").arg(name, channelListUrlText(viewer)), LogLevel::INFO);
     saveChannels();
     refreshGridAfterChannelSetChanged();
 }
@@ -1178,23 +1225,34 @@ void MainWindow::editChannel(VlcWidget *viewer)
     const ConnectionInfo current{
         viewer->name(),
         viewer->url(),
-        viewer->autoReconnect()
+        viewer->autoReconnect(),
+        viewer->relayEnabled(),
+        viewer->sourceUrl(),
+        viewer->relayPath()
     };
 
     auto edited = ConnectionDialog::getConnectionInfo(this, current, "채널 수정");
     if (!edited) return;
 
     const QString name = edited->channelName.trimmed();
-    const QString url = edited->rtspUrl.trimmed();
-    if (name.isEmpty() || url.isEmpty()) return;
+    const QString sourceUrl = sourceUrlForConnection(*edited);
+    const QString relayPath = MediaRelayManager::normalizeRelayPath(edited->relayPath);
+    const QString url = playUrlForConnection(*edited);
+    if (name.isEmpty() || sourceUrl.isEmpty() || url.isEmpty()) return;
 
     const bool nameChanged = name != current.channelName;
+    const bool sourceUrlChanged = sourceUrl != current.sourceUrl;
+    const bool relayChanged = edited->relayEnabled != current.relayEnabled
+        || relayPath != MediaRelayManager::normalizeRelayPath(current.relayPath);
     const bool urlChanged = url != current.rtspUrl;
     const bool autoReconnectChanged = edited->autoReconnect != current.autoReconnect;
-    if (!nameChanged && !urlChanged && !autoReconnectChanged) return;
+    const bool streamChanged = sourceUrlChanged || relayChanged || urlChanged;
+    if (!nameChanged && !streamChanged && !autoReconnectChanged) return;
 
     viewer->setAutoReconnect(edited->autoReconnect);
-    if (urlChanged) {
+    viewer->setStreamInfo(sourceUrl, edited->relayEnabled, relayPath);
+    if (streamChanged) {
+        syncRelayManager();
         viewer->play(url, name);
     } else if (nameChanged) {
         viewer->setChannelInfo(name, url);
@@ -1205,7 +1263,8 @@ void MainWindow::editChannel(VlcWidget *viewer)
         if (!fullViewer || fullViewer->sourceViewer() != viewer) continue;
 
         fullViewer->setAutoReconnect(edited->autoReconnect);
-        if (urlChanged) {
+        fullViewer->setStreamInfo(sourceUrl, edited->relayEnabled, relayPath);
+        if (streamChanged) {
             fullViewer->play(url, name);
         } else if (nameChanged) {
             fullViewer->setChannelInfo(name, url);
@@ -1234,7 +1293,7 @@ void MainWindow::updateChannelTableRow(VlcWidget *viewer)
         nameLabel->setText(viewer->name());
     }
     if (auto *urlLabel = cell->findChild<QLabel *>("urlLabel")) {
-        urlLabel->setText(viewer->url());
+        urlLabel->setText(channelListUrlText(viewer));
     }
     if (auto *statusLabel = cell->findChild<QLabel *>("statusLabel")) {
         applyChannelStatusLabel(statusLabel, viewer->status());
@@ -1262,6 +1321,65 @@ void MainWindow::updateChannelStatsRows()
         auto *statsLabel = cell->findChild<QLabel *>("statsLabel");
         applyChannelStatsLabel(statsLabel, viewer->getStats());
     }
+}
+
+QString MainWindow::sourceUrlForConnection(const ConnectionInfo &info) const
+{
+    const QString sourceUrl = info.sourceUrl.trimmed();
+    return sourceUrl.isEmpty() ? info.rtspUrl.trimmed() : sourceUrl;
+}
+
+QString MainWindow::playUrlForConnection(const ConnectionInfo &info) const
+{
+    if (info.relayEnabled && m_relayManager) {
+        return m_relayManager->playUrlForPath(info.relayPath);
+    }
+    return sourceUrlForConnection(info);
+}
+
+QString MainWindow::channelListUrlText(VlcWidget *viewer) const
+{
+    if (!viewer) return QString();
+    if (!viewer->relayEnabled()) {
+        return viewer->url();
+    }
+    return QStringLiteral("relay:%1  src:%2")
+        .arg(viewer->relayPath(), viewer->sourceUrl());
+}
+
+bool MainWindow::syncRelayManager()
+{
+    if (!m_relayManager) return true;
+
+    QVector<MediaRelayManager::Channel> channels;
+    channels.reserve(m_viewers.size());
+
+    for (auto *viewer : m_viewers) {
+        if (!viewer || !viewer->relayEnabled()) continue;
+
+        channels.append(MediaRelayManager::Channel{
+            viewer->name(),
+            viewer->sourceUrl(),
+            viewer->relayPath()
+        });
+    }
+
+    m_relayManager->setChannels(channels);
+    const bool ok = m_relayManager->ensureRunning();
+    if (!ok && !channels.isEmpty()) {
+        showToast(QStringLiteral("MediaMTX 시작 실패"),
+                  QStringLiteral("mediamtx 설치 또는 ZIILAB_MEDIAMTX 경로를 확인하세요."),
+                  LogLevel::ERROR,
+                  QStringLiteral("로그 보기"),
+                  [this]() {
+                      setRightPanelVisible(true);
+                      if (m_rightTabs) m_rightTabs->setCurrentIndex(2);
+                  },
+                  QString(),
+                  {},
+                  9000);
+    }
+    return ok;
 }
 
 void MainWindow::showChannelInfo(VlcWidget *viewer)
@@ -1364,6 +1482,7 @@ void MainWindow::removeSelectedChannel()
     }
     if (!removed) return;
 
+    syncRelayManager();
     renderChannelTable();
     saveChannels();
     refreshGridAfterChannelSetChanged();

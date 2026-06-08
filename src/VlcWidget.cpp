@@ -16,6 +16,7 @@
 #include <QScreen>
 #include <QPixmap>
 #include <QGuiApplication>
+#include <QUrl>
 #include <atomic>
 
 namespace {
@@ -39,6 +40,15 @@ QString formatElapsed(int seconds) {
         .arg(h, 2, 10, QLatin1Char('0'))
         .arg(m, 2, 10, QLatin1Char('0'))
         .arg(s, 2, 10, QLatin1Char('0'));
+}
+
+bool isLocalRtspUrl(const QString &url)
+{
+    const QUrl parsed(url);
+    const QString host = parsed.host().toLower();
+    return host == QStringLiteral("127.0.0.1")
+        || host == QStringLiteral("localhost")
+        || host == QStringLiteral("::1");
 }
 
 } // namespace
@@ -138,6 +148,9 @@ libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
     if (!media) return nullptr;
     // 의견#2: UDP 사용 (:rtsp-tcp 미지정 = VLC 순정 기본값 UDP) — 음영지역 재연결 복구 단축.
     // TCP 로 되돌리려면 아래에 libvlc_media_add_option(media, ":rtsp-tcp"); 한 줄 추가.
+    if (isLocalRtspUrl(url)) {
+        libvlc_media_add_option(media, ":rtsp-tcp");
+    }
     libvlc_media_add_option(media, ":network-caching=1000");  // 의견#5
     libvlc_media_add_option(media, ":live-caching=1000");
     libvlc_media_add_option(media, ":no-audio");
@@ -152,6 +165,9 @@ libvlc_media_t *VlcWidget::openRecordingMedia(const QString &url, const QString 
     // 녹화도 재생과 동일하게 UDP 기본값을 사용한다.
     // 무선 구간에서 일부 패킷 손실이 있더라도 TCP 재전송 지연/teardown 지연보다
     // 최신 스트림을 계속 기록하는 쪽을 우선한다.
+    if (isLocalRtspUrl(url)) {
+        libvlc_media_add_option(media, ":rtsp-tcp");
+    }
     libvlc_media_add_option(media, ":network-caching=1000");
     libvlc_media_add_option(media, ":live-caching=1000");
     libvlc_media_add_option(media, ":no-audio");
@@ -229,6 +245,13 @@ void VlcWidget::setChannelInfo(const QString &name, const QString &url)
     m_url = url;
     m_nameLabel->setText(name);
     updateRecordUi();
+}
+
+void VlcWidget::setStreamInfo(const QString &sourceUrl, bool relayEnabled, const QString &relayPath)
+{
+    m_sourceUrl = sourceUrl.trimmed();
+    m_relayEnabled = relayEnabled;
+    m_relayPath = relayPath.trimmed();
 }
 
 void VlcWidget::setupEvents()

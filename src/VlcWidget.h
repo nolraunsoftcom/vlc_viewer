@@ -69,6 +69,10 @@ public:
     bool isPlaying() const;
     QString url() const { return m_url; }
     QString name() const { return m_name; }
+    QString sourceUrl() const { return m_sourceUrl.isEmpty() ? m_url : m_sourceUrl; }
+    bool relayEnabled() const { return m_relayEnabled; }
+    QString relayPath() const { return m_relayPath; }
+    void setStreamInfo(const QString &sourceUrl, bool relayEnabled, const QString &relayPath);
     void updateTime(const QString &timeStr);
     void refreshStats(qint64 nowMs);
     Stats getStats() const;
@@ -122,6 +126,9 @@ private:
     QPushButton *m_recordBtn = nullptr;
     QString m_url;
     QString m_name;
+    QString m_sourceUrl;
+    QString m_relayPath;
+    bool m_relayEnabled = false;
     bool m_autoReconnect = true;
     bool m_isFullscreen = false;
     bool m_reconnecting = false;

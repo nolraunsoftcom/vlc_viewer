@@ -23,6 +23,8 @@ public:
 private:
     QPointer<VlcWidget> m_viewer;
     QLabel *m_locationLabel = nullptr;
+    QLabel *m_sourceLabel = nullptr;
+    QLabel *m_relayLabel = nullptr;
     QTreeWidget *m_statsTree = nullptr;
     QHash<QString, QTreeWidgetItem *> m_valueItems;
 

@@ -3,12 +3,16 @@
 #include <QDialog>
 #include <QLineEdit>
 #include <QCheckBox>
+#include <QString>
 #include <optional>
 
 struct ConnectionInfo {
     QString channelName;
     QString rtspUrl;
-    bool autoReconnect;
+    bool autoReconnect = true;
+    bool relayEnabled = true;
+    QString sourceUrl;
+    QString relayPath;
 };
 
 class ConnectionDialog : public QDialog
@@ -33,6 +37,8 @@ protected:
 private:
     QLineEdit *m_channelName = nullptr;
     QLineEdit *m_rtspUrl = nullptr;
+    QCheckBox *m_relayEnabled = nullptr;
+    QLineEdit *m_relayPath = nullptr;
     QCheckBox *m_autoReconnect = nullptr;
 
     void setupUi(const ConnectionInfo &initialInfo, const QString &windowTitle);

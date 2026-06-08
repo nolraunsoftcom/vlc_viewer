@@ -74,6 +74,7 @@ if(APPLE)
         src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
         src/ResourceMonitor.cpp
+        src/MediaRelayManager.cpp
         resources/resources.qrc
         ${APP_ICON_MACOS}
     )
@@ -86,6 +87,7 @@ elseif(WIN32)
         src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
         src/ResourceMonitor.cpp
+        src/MediaRelayManager.cpp
         resources/resources.qrc
         ${APP_ICON_WINDOWS_RC}
     )
@@ -98,6 +100,7 @@ else()
         src/ChannelInfoDialog.cpp
         src/StatusBar.cpp
         src/ResourceMonitor.cpp
+        src/MediaRelayManager.cpp
         resources/resources.qrc
     )
 endif()
@@ -113,4 +116,53 @@ if(APPLE)
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_ICON_FILE "logo.icns"
     )
+endif()
+
+# ============================================================
+# MediaMTX relay runtime bundling
+# ============================================================
+set(MEDIAMTX_EXECUTABLE "" CACHE FILEPATH "Path to MediaMTX executable to bundle")
+
+if(NOT MEDIAMTX_EXECUTABLE)
+    if(WIN32)
+        set(_mediamtx_repo_candidate "${CMAKE_SOURCE_DIR}/third_party/mediamtx/mediamtx.exe")
+    else()
+        set(_mediamtx_repo_candidate "${CMAKE_SOURCE_DIR}/third_party/mediamtx/mediamtx")
+    endif()
+
+    if(EXISTS "${_mediamtx_repo_candidate}")
+        set(MEDIAMTX_EXECUTABLE "${_mediamtx_repo_candidate}"
+            CACHE FILEPATH "Path to MediaMTX executable to bundle" FORCE)
+    else()
+        find_program(_mediamtx_from_path NAMES mediamtx)
+        if(_mediamtx_from_path)
+            set(MEDIAMTX_EXECUTABLE "${_mediamtx_from_path}"
+                CACHE FILEPATH "Path to MediaMTX executable to bundle" FORCE)
+        endif()
+    endif()
+endif()
+
+if(MEDIAMTX_EXECUTABLE)
+    if(WIN32)
+        set(_mediamtx_bundle_name "mediamtx.exe")
+    else()
+        set(_mediamtx_bundle_name "mediamtx")
+    endif()
+
+    if(APPLE)
+        set(_mediamtx_bundle_dir "$<TARGET_FILE_DIR:viewer>/../Resources")
+    else()
+        set(_mediamtx_bundle_dir "$<TARGET_FILE_DIR:viewer>")
+    endif()
+
+    message(STATUS "Bundling MediaMTX: ${MEDIAMTX_EXECUTABLE}")
+    add_custom_target(bundle_mediamtx ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_mediamtx_bundle_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${MEDIAMTX_EXECUTABLE}"
+            "${_mediamtx_bundle_dir}/${_mediamtx_bundle_name}"
+        DEPENDS viewer
+        VERBATIM)
+else()
+    message(STATUS "MediaMTX executable not found; relay binary will not be bundled. Set -DMEDIAMTX_EXECUTABLE=/path/to/mediamtx for product builds.")
 endif()

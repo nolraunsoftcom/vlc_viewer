@@ -137,6 +137,55 @@ jobs:
             throw "VLC plugins directory not found under C:\vlc-sdk"
           }
 
+      - name: Cache MediaMTX
+        id: cache-mediamtx
+        uses: actions/cache@v4
+        with:
+          path: C:\mediamtx
+          key: mediamtx-windows-amd64-v1.19.0
+
+      - name: Download MediaMTX
+        if: steps.cache-mediamtx.outputs.cache-hit != 'true'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
+          $version = "v1.19.0"
+          $asset = "mediamtx_v1.19.0_windows_amd64.zip"
+          $baseUrl = "https://github.com/bluenviron/mediamtx/releases/download/$version"
+
+          Write-Host "Downloading MediaMTX $version..."
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o $asset "$baseUrl/$asset"
+          curl.exe -L --fail --retry 5 --retry-delay 5 --connect-timeout 30 -o checksums.sha256 "$baseUrl/checksums.sha256"
+
+          $actualHash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          $expectedLine = Get-Content checksums.sha256 | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
+          if (-not $expectedLine) {
+            throw "MediaMTX checksum entry not found for $asset"
+          }
+          $expectedHash = ($expectedLine -split '\s+')[0].ToLower()
+          if ($actualHash -ne $expectedHash) {
+            throw "MediaMTX checksum mismatch. expected=$expectedHash actual=$actualHash"
+          }
+
+          Remove-Item C:\mediamtx -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path C:\mediamtx | Out-Null
+          Expand-Archive -Path $asset -DestinationPath C:\mediamtx -Force
+
+          if (-not (Test-Path C:\mediamtx\mediamtx.exe)) {
+            throw "mediamtx.exe not found after extraction"
+          }
+
+      - name: Validate MediaMTX
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if (-not (Test-Path C:\mediamtx\mediamtx.exe)) {
+            throw "mediamtx.exe not found under C:\mediamtx"
+          }
+          C:\mediamtx\mediamtx.exe --version
+
       - name: Build
         shell: cmd
         run: |
@@ -158,7 +207,8 @@ jobs:
             -DCMAKE_C_COMPILER=cl ^
             -DCMAKE_CXX_COMPILER=cl ^
             -DCMAKE_PREFIX_PATH=%QT_ROOT_DIR% ^
-            -DVLC_DIR=C:\vlc-sdk
+            -DVLC_DIR=C:\vlc-sdk ^
+            -DMEDIAMTX_EXECUTABLE=C:/mediamtx/mediamtx.exe
           cmake --build .
 
       - name: Package
@@ -168,6 +218,7 @@ jobs:
           if exist dist rmdir /S /Q dist
           mkdir dist
           copy viewer.exe dist\
+          copy mediamtx.exe dist\
           "%QT_ROOT_DIR%\bin\windeployqt.exe" --release --compiler-runtime dist\viewer.exe
           copy C:\vlc-sdk\*.dll dist\
           if exist C:\vlc-sdk\plugins.dat copy C:\vlc-sdk\plugins.dat dist\

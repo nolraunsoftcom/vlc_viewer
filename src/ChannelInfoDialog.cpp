@@ -133,6 +133,14 @@ ChannelInfoDialog::ChannelInfoDialog(VlcWidget *viewer, QWidget *parent)
     m_locationLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
     statsLayout->addWidget(m_locationLabel);
 
+    m_sourceLabel = new QLabel(statsPage);
+    m_sourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    statsLayout->addWidget(m_sourceLabel);
+
+    m_relayLabel = new QLabel(statsPage);
+    m_relayLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    statsLayout->addWidget(m_relayLabel);
+
     tabs->addTab(statsPage, QStringLiteral("통계"));
     layout->addWidget(tabs);
 
@@ -162,14 +170,24 @@ void ChannelInfoDialog::refresh()
     if (!m_viewer) {
         setWindowTitle(QStringLiteral("채널 정보"));
         if (m_locationLabel) {
-            m_locationLabel->setText(QStringLiteral("위치: --"));
+            m_locationLabel->setText(QStringLiteral("재생 URL: --"));
         }
+        if (m_sourceLabel) m_sourceLabel->setText(QStringLiteral("원본 URL: --"));
+        if (m_relayLabel) m_relayLabel->setText(QStringLiteral("Relay: --"));
         return;
     }
 
     setWindowTitle(QStringLiteral("채널 정보 - %1").arg(m_viewer->name()));
     if (m_locationLabel) {
-        m_locationLabel->setText(QStringLiteral("위치: %1").arg(m_viewer->url()));
+        m_locationLabel->setText(QStringLiteral("재생 URL: %1").arg(m_viewer->url()));
+    }
+    if (m_sourceLabel) {
+        m_sourceLabel->setText(QStringLiteral("원본 URL: %1").arg(m_viewer->sourceUrl()));
+    }
+    if (m_relayLabel) {
+        m_relayLabel->setText(m_viewer->relayEnabled()
+            ? QStringLiteral("Relay: enabled (%1)").arg(m_viewer->relayPath())
+            : QStringLiteral("Relay: disabled"));
     }
 
     const VlcWidget::Stats stats = m_viewer->getStats();

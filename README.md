@@ -63,6 +63,15 @@ cmake .. -DCMAKE_PREFIX_PATH=/opt/homebrew
 make -j$(sysctl -n hw.ncpu)
 ```
 
+MediaMTX를 제품 패키지에 포함하는 빌드:
+
+```bash
+cmake .. \
+  -DCMAKE_PREFIX_PATH=/opt/homebrew \
+  -DMEDIAMTX_EXECUTABLE=/path/to/mediamtx
+make -j$(sysctl -n hw.ncpu)
+```
+
 실행:
 ```bash
 ./viewer
@@ -101,7 +110,8 @@ mkdir build && cd build
 
 cmake .. -G "Visual Studio 17 2022" -A x64 ^
   -DCMAKE_PREFIX_PATH=C:\Qt\6.11.0\msvc2022_64 ^
-  -DVLC_DIR=C:\vlc-sdk
+  -DVLC_DIR=C:\vlc-sdk ^
+  -DMEDIAMTX_EXECUTABLE=C:\mediamtx\mediamtx.exe
 
 cmake --build . --config Release
 ```
@@ -117,6 +127,9 @@ copy C:\vlc-sdk\plugins.dat Release\
 xcopy C:\vlc-sdk\plugins Release\plugins\ /E
 if (Test-Path C:\vlc-sdk\lua) { xcopy C:\vlc-sdk\lua Release\lua\ /E /I /Y }
 if (Test-Path C:\vlc-sdk\locale) { xcopy C:\vlc-sdk\locale Release\locale\ /E /I /Y }
+
+# MediaMTX relay 런타임은 viewer.exe 옆에 둔다.
+copy C:\mediamtx\mediamtx.exe Release\
 ```
 
 ### Linux
@@ -169,6 +182,8 @@ viewer/
 ## 운영 문서
 
 - [VOXL2 RTSP 네트워크 접근 가이드](docs/voxl2-rtsp-network-access.md)
+- [VOXL2 Mini 기반 viewer 개선 계획](docs/voxl2-mini-viewer-improvement-plan.md)
+- [MediaMTX relay 전환 가이드](docs/mediamtx-relay-migration-guide.md)
 
 ---
 
