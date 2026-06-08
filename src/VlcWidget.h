@@ -16,7 +16,7 @@ class VlcWidget : public QWidget
 
 public:
     enum class Status { Idle, Connecting, Connected, Disconnected, Reconnecting, Failed };
-    enum class RecState { Idle, Starting, Active };
+    enum class RecState { Idle, Starting, Active, Stopping };
     enum class RecStopReason { Manual, Disconnect, Remove };
 
     explicit VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent = nullptr);
@@ -167,6 +167,7 @@ private:
     void setupEvents();
     void detachRecordingEvents();
     void setupRecordingEvents();
+    bool isCurrentRecordingEventSource(const void *eventSource) const;
     void showStatus(const QString &text);
     void showContextMenu(const QPoint &globalPos);
     void tryReconnect();
