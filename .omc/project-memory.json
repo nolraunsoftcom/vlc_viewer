@@ -93,32 +93,44 @@
   "hotPaths": [
     {
       "path": "src/MediaRelayManager.cpp",
-      "accessCount": 16,
-      "lastAccessed": 1780986778926,
+      "accessCount": 22,
+      "lastAccessed": 1780998177147,
       "type": "file"
     },
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 7,
-      "lastAccessed": 1780985115892,
-      "type": "file"
-    },
-    {
-      "path": "CMakeLists.txt",
-      "accessCount": 5,
-      "lastAccessed": 1780985305977,
-      "type": "file"
-    },
-    {
-      "path": "src/MediaRelayManager.h",
-      "accessCount": 4,
-      "lastAccessed": 1780985886438,
+      "accessCount": 15,
+      "lastAccessed": 1780999004053,
       "type": "file"
     },
     {
       "path": "src/VlcWidget.cpp",
-      "accessCount": 3,
-      "lastAccessed": 1780980116720,
+      "accessCount": 15,
+      "lastAccessed": 1780999496019,
+      "type": "file"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "accessCount": 12,
+      "lastAccessed": 1780999513795,
+      "type": "file"
+    },
+    {
+      "path": "src/Version.h",
+      "accessCount": 8,
+      "lastAccessed": 1780999512914,
+      "type": "file"
+    },
+    {
+      "path": "src/MediaRelayManager.h",
+      "accessCount": 6,
+      "lastAccessed": 1780998117339,
+      "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.h",
+      "accessCount": 6,
+      "lastAccessed": 1780999564648,
       "type": "file"
     },
     {
@@ -134,9 +146,15 @@
       "type": "file"
     },
     {
-      "path": "src/VlcWidget.h",
-      "accessCount": 2,
-      "lastAccessed": 1780979862693,
+      "path": "src/main.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1780992413827,
+      "type": "file"
+    },
+    {
+      "path": "src/ConnectionDialog.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1780998203209,
       "type": "file"
     },
     {
@@ -164,12 +182,6 @@
       "type": "file"
     },
     {
-      "path": "src/main.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1780979863707,
-      "type": "file"
-    },
-    {
       "path": "docs/voxl2-rtsp-network-access.md",
       "accessCount": 1,
       "lastAccessed": 1780979871150,
@@ -185,18 +197,6 @@
       "path": "src/ConnectionDialog.h",
       "accessCount": 1,
       "lastAccessed": 1780979879028,
-      "type": "file"
-    },
-    {
-      "path": "src/ConnectionDialog.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1780981269215,
-      "type": "file"
-    },
-    {
-      "path": "src/Version.h",
-      "accessCount": 1,
-      "lastAccessed": 1780985103403,
       "type": "file"
     }
   ],
