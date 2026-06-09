@@ -135,7 +135,12 @@ private:
     bool m_hasConnectedOnce = false;
     Status m_status = Status::Idle;
     void setStatus(Status s);
-    static const int MAX_RECONNECT = 30;
+    // 재접속 정책 (relay TIME_WAIT 폭증 방지): 빠른 포기 + exponential backoff + 자동 중단.
+    // 카메라 OFF 시 5초 간격 무한 재시도로 로컬 RTSP 연결이 누적되던 문제 대응.
+    static constexpr int INITIAL_MAX_RECONNECT = 3;        // 한 번도 연결된 적 없는 채널(카메라 OFF 등)
+    static constexpr int ESTABLISHED_MAX_RECONNECT = 10;   // 연결된 적 있는 채널(현장 흔들림 복구 유지)
+    static constexpr int RECONNECT_BASE_MS = 5000;         // backoff 기준: 5 → 10 → 20 → 40 → 60(s)
+    static constexpr int RECONNECT_MAX_INTERVAL_MS = 60000;
 
     // 녹화 상태
     RecState m_recState = RecState::Idle;
@@ -178,6 +183,8 @@ private:
     void showStatus(const QString &text);
     void showContextMenu(const QPoint &globalPos);
     void tryReconnect();
+    int reconnectIntervalMs() const;   // 현재 상태 기준 다음 재시도 간격(backoff)
+    void scheduleReconnect();          // giveUp/autoReconnect 확인 후 backoff 간격으로 타이머 무장
     QFuture<void> cleanupPlayer();
     QFuture<void> cleanupRecordingPlayer();
     void waitForCleanupFinished();
@@ -201,6 +208,7 @@ private:
 
     QTimer *m_reconnectTimer = nullptr;
     int m_reconnectCount = 0;
+    bool m_giveUp = false;   // 자동 재연결 포기(Failed) 상태 — 수동 reconnect/재생 전까지 재무장 금지
     QFuture<void> m_playerCleanup;
     QFuture<void> m_recordCleanup;
 

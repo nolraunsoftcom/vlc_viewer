@@ -104,12 +104,15 @@ QPushButton:default {
 ConnectionDialog::ConnectionDialog(int channelNumber, QWidget *parent)
     : QDialog(parent)
 {
+    // 원본 URL 기본값을 비운다. (이전엔 169.254.4.1 placeholder 가 채워져 있어, 사용자가
+    // 그대로 추가하면 곧바로 도달불가 source + 재접속 루프가 되는 "죽은 채널"이 만들어졌다.
+    // 비워두면 accept() 의 RTSP 검증에 걸려 실제 주소 입력을 강제한다.)
     setupUi(ConnectionInfo{
         QString("Camera %1").arg(channelNumber),
-        "rtsp://169.254.4.1:8900/live",
+        QString(),
         true,
         true,
-        "rtsp://169.254.4.1:8900/live",
+        QString(),
         QString("voxl%1").arg(channelNumber)
     }, "채널 추가");
 }
@@ -149,6 +152,7 @@ void ConnectionDialog::setupUi(const ConnectionInfo &initialInfo, const QString 
         : initialInfo.sourceUrl.trimmed();
     m_rtspUrl = new QLineEdit(sourceUrl, channelGroup);
     m_rtspUrl->setMinimumWidth(300);
+    m_rtspUrl->setPlaceholderText(QStringLiteral("rtsp://<카메라 IP>:8900/live"));
     channelForm->addRow("원본 RTSP URL:", m_rtspUrl);
 
     mainLayout->addWidget(channelGroup);

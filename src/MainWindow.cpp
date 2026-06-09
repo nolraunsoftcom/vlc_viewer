@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ChannelInfoDialog.h"
 #include "MediaRelayManager.h"
+#include "Version.h"
 #include "VlcWidget.h"
 #include "StatusBar.h"
 #include "Style.h"
@@ -243,7 +244,13 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     m_saveDebounceTimer->setInterval(150);
     connect(m_saveDebounceTimer, &QTimer::timeout, this, &MainWindow::saveChannels);
 
-    appendLog("System started", LogLevel::INFO);
+    appendLog(QStringLiteral("================================================"), LogLevel::INFO);
+    appendLog(QString("영상관리시스템 v%1").arg(QStringLiteral(APP_VERSION)), LogLevel::INFO);
+    appendLog(QString("libVLC %1 / Qt %2")
+                  .arg(QString::fromLatin1(libvlc_get_version()),
+                       QString::fromLatin1(qVersion())),
+              LogLevel::INFO);
+    appendLog(QStringLiteral("System started"), LogLevel::INFO);
     loadChannels();
     if (m_viewers.isEmpty()) {
         rebuildGrid();
@@ -986,6 +993,16 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         }
     }
 
+    // relay 채널이 아직 연결되지 않았으면(주로 relay 미준비로 재생이 보류된 idle 상태)
+    // 전체화면에서 새 재접속 루프를 시작하지 않는다. relay 가 준비되어 채널이 연결된 뒤
+    // 다시 시도하면 된다. (직결 채널은 이 정책에서 제외)
+    if (viewer->relayEnabled() && viewer->status() != VlcWidget::Status::Connected) {
+        showToast(QStringLiteral("전체화면을 열 수 없음"),
+                  QStringLiteral("채널이 아직 연결되지 않았습니다. 연결 후 다시 시도하세요."),
+                  LogLevel::WARN);
+        return;
+    }
+
     // 그리드 원본은 유지 — 탭엔 동일 URL의 독립 스트림을 띄움
     auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
     fullViewer->setFullscreenMode(true);
@@ -1177,10 +1194,16 @@ void MainWindow::loadChannels()
         ++channelNumber;
     }
 
-    syncRelayManager();
+    const bool relayOk = syncRelayManager();
 
     for (auto *viewer : loadedViewers) {
-        viewer->play(viewer->url(), viewer->name());
+        if (viewer->relayEnabled() && !relayOk) {
+            // 앱 시작 시 relay 기동 실패 → relay 채널 재생 보류(무의미한 재접속 루프 방지).
+            appendLog(QString("Channel loaded (relay 미준비 — 재생 보류): %1").arg(viewer->name()),
+                      LogLevel::WARN);
+        } else {
+            viewer->play(viewer->url(), viewer->name());
+        }
         addChannelToTable(viewer);
         appendLog(QString("Channel loaded: %1 (%2)").arg(viewer->name(), channelListUrlText(viewer)),
                   LogLevel::DEBUG);
@@ -1208,8 +1231,14 @@ void MainWindow::addChannel()
     viewer->setStreamInfo(sourceUrl, info->relayEnabled, relayPath);
     m_channelListOrder.append(viewer);
     m_gridIndexes.insert(viewer, firstFreeGridIndex());
-    syncRelayManager();
-    viewer->play(url, name);
+    const bool relayOk = syncRelayManager();
+    if (!info->relayEnabled || relayOk) {
+        viewer->play(url, name);
+    } else {
+        // relay 적용/기동 실패 시 재생을 시작하지 않는다(무의미한 재접속 루프 방지).
+        appendLog(QString("[%1] relay 준비 실패 — 재생 보류. 상태 확인 후 채널 수정으로 재시도하세요.").arg(name),
+                  LogLevel::WARN);
+    }
     addChannelToTable(viewer);
     selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier, false);
 
@@ -1252,7 +1281,18 @@ void MainWindow::editChannel(VlcWidget *viewer)
     viewer->setAutoReconnect(edited->autoReconnect);
     viewer->setStreamInfo(sourceUrl, edited->relayEnabled, relayPath);
     if (streamChanged) {
-        syncRelayManager();
+        const bool relayOk = syncRelayManager();
+        if (edited->relayEnabled && !relayOk) {
+            // relay 적용 실패 → 변경을 커밋하지 않고 이전 설정으로 롤백한다.
+            // (아래의 전체화면 복제본 재생 / table 갱신 / saveChannels 까지 모두 건너뛰어
+            //  상태 불일치와 실패 URL 재접속 루프를 방지.)
+            appendLog(QString("[%1] relay 준비 실패 — 변경 취소(이전 설정 복원).").arg(name), LogLevel::WARN);
+            viewer->setAutoReconnect(current.autoReconnect);
+            viewer->setStreamInfo(current.sourceUrl, current.relayEnabled,
+                                  MediaRelayManager::normalizeRelayPath(current.relayPath));
+            syncRelayManager();   // 이전 구성으로 relay 복원
+            return;
+        }
         viewer->play(url, name);
     } else if (nameChanged) {
         viewer->setChannelInfo(name, url);

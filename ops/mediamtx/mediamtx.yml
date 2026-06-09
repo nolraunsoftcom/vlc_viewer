@@ -17,7 +17,7 @@ playback: false
 
 rtsp: true
 rtspTransports: [tcp]
-rtspAddress: :8554
+rtspAddress: 127.0.0.1:8554
 
 rtmp: false
 hls: false
@@ -29,7 +29,7 @@ paths:
   voxl1:
     source: rtsp://169.254.4.1:8900/live
     sourceOnDemand: false
-    rtspTransport: udp
+    rtspTransport: tcp
 
     record: false
     recordPath: ./recordings/%path/%Y-%m-%d_%H-%M-%S-%f

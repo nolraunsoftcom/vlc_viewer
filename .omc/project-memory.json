@@ -92,45 +92,111 @@
   },
   "hotPaths": [
     {
-      "path": "docs/voxl2-mini-viewer-improvement-plan.md",
-      "accessCount": 1,
-      "lastAccessed": 1780933953277,
-      "type": "file"
-    },
-    {
-      "path": "src/VlcWidget.h",
-      "accessCount": 1,
-      "lastAccessed": 1780933968118,
-      "type": "file"
-    },
-    {
-      "path": "src/VlcWidget.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1780933968373,
+      "path": "src/MediaRelayManager.cpp",
+      "accessCount": 22,
+      "lastAccessed": 1780998177147,
       "type": "file"
     },
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1780933978849,
+      "accessCount": 15,
+      "lastAccessed": 1780999004053,
+      "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.cpp",
+      "accessCount": 15,
+      "lastAccessed": 1780999496019,
       "type": "file"
     },
     {
       "path": "CMakeLists.txt",
-      "accessCount": 1,
-      "lastAccessed": 1780942326333,
+      "accessCount": 12,
+      "lastAccessed": 1780999513795,
       "type": "file"
     },
     {
-      "path": "src/MediaRelayManager.cpp",
-      "accessCount": 1,
-      "lastAccessed": 1780942326601,
+      "path": "src/Version.h",
+      "accessCount": 8,
+      "lastAccessed": 1780999512914,
       "type": "file"
     },
     {
       "path": "src/MediaRelayManager.h",
+      "accessCount": 6,
+      "lastAccessed": 1780998117339,
+      "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.h",
+      "accessCount": 6,
+      "lastAccessed": 1780999564648,
+      "type": "file"
+    },
+    {
+      "path": "docs/mediamtx-relay-migration-guide.md",
+      "accessCount": 3,
+      "lastAccessed": 1780985985536,
+      "type": "file"
+    },
+    {
+      "path": "ops/mediamtx/mediamtx.yml",
+      "accessCount": 3,
+      "lastAccessed": 1780986765652,
+      "type": "file"
+    },
+    {
+      "path": "src/main.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1780992413827,
+      "type": "file"
+    },
+    {
+      "path": "src/ConnectionDialog.cpp",
+      "accessCount": 3,
+      "lastAccessed": 1780998203209,
+      "type": "file"
+    },
+    {
+      "path": "docs/voxl2-mini-viewer-improvement-plan.md",
+      "accessCount": 2,
+      "lastAccessed": 1780979870676,
+      "type": "file"
+    },
+    {
+      "path": "resources/app.rc.in",
+      "accessCount": 2,
+      "lastAccessed": 1780985959412,
+      "type": "file"
+    },
+    {
+      "path": "README.md",
       "accessCount": 1,
-      "lastAccessed": 1780942357970,
+      "lastAccessed": 1780979853115,
+      "type": "file"
+    },
+    {
+      "path": "src/MainWindow.h",
+      "accessCount": 1,
+      "lastAccessed": 1780979862201,
+      "type": "file"
+    },
+    {
+      "path": "docs/voxl2-rtsp-network-access.md",
+      "accessCount": 1,
+      "lastAccessed": 1780979871150,
+      "type": "file"
+    },
+    {
+      "path": "docs/2026-06-06-수정사항.md",
+      "accessCount": 1,
+      "lastAccessed": 1780979878632,
+      "type": "file"
+    },
+    {
+      "path": "src/ConnectionDialog.h",
+      "accessCount": 1,
+      "lastAccessed": 1780979879028,
       "type": "file"
     }
   ],
