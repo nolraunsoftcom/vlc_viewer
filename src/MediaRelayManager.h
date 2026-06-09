@@ -39,6 +39,7 @@ private:
     QVector<Channel> m_channels;
     QString m_lastConfigSignature;
     bool m_intentionalStop = false;   // stopProcess() 로 의도적으로 끈 경우 = true (크래시 오탐 방지)
+    void *m_jobHandle = nullptr;      // Windows Job Object 핸들 (KILL_ON_JOB_CLOSE) — 앱 사망 시 mediamtx 동반 종료
 
     static const quint16 RTSP_PORT = 8554;   // rtspAddress :8554
     static const quint16 API_PORT  = 9997;   // apiAddress 127.0.0.1:9997
@@ -61,4 +62,10 @@ private:
     bool isMediamtxProcess(qint64 pid) const; // PID 재사용 방지: 실제 mediamtx 인지 확인
     bool killProcessByPid(qint64 pid);        // 특정 PID 만 종료
     bool reclaimStaleProcess();               // PID 파일 기준 우리 고아 mediamtx 만 회수
+
+    // 고아 종결: Windows Job Object(KILL_ON_JOB_CLOSE). viewer.exe 가 정상 종료든 크래시든
+    // 사라지면 OS 가 job 을 닫으며 자식 mediamtx 를 강제 종료한다. (다른 OS 는 no-op)
+    void setupJobObject();
+    void assignToJobObject(qint64 pid);
+    void closeJobObject();
 };

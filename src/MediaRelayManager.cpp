@@ -13,6 +13,16 @@
 #include <QTextStream>
 #include <QThread>
 
+#if defined(Q_OS_WIN)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <windows.h>
+#endif
+
 namespace {
 
 QString yamlQuoted(QString value)
@@ -29,6 +39,7 @@ MediaRelayManager::MediaRelayManager(QObject *parent)
     , m_process(new QProcess(this))
 {
     m_process->setProcessChannelMode(QProcess::MergedChannels);
+    setupJobObject();   // 앱이 어떻게 죽든 자식 mediamtx 가 같이 죽도록 (Windows)
 
 #if defined(Q_OS_WIN)
     // Windows: 자식 mediamtx 콘솔 창이 따로 뜨지 않도록 숨긴다(CREATE_NO_WINDOW = 0x08000000).
@@ -74,6 +85,7 @@ MediaRelayManager::MediaRelayManager(QObject *parent)
 MediaRelayManager::~MediaRelayManager()
 {
     stop();
+    closeJobObject();
 }
 
 void MediaRelayManager::setChannels(const QVector<Channel> &channels)
@@ -384,6 +396,7 @@ bool MediaRelayManager::startProcess()
 
     const qint64 pid = m_process->processId();
     writePidFile(pid);   // 건강 확인 후에만 기록 → 다음 실행의 고아 회수에 사용
+    assignToJobObject(pid);   // 앱 종료/크래시 시 OS 가 mediamtx 를 동반 종료하도록 job 에 연결
     emit logMessage(
         QStringLiteral("MediaMTX 시작·확인됨 (pid=%1, API/RTSP open, config=%2).")
             .arg(pid).arg(configPath()),
@@ -541,4 +554,62 @@ bool MediaRelayManager::reclaimStaleProcess()
         emit logMessage(QStringLiteral("PID %1 종료 실패.").arg(pid), 3);
     }
     return ok;
+}
+
+// ============================================================
+// 고아 종결 — Windows Job Object (KILL_ON_JOB_CLOSE)
+// 앱(viewer.exe)이 정상 종료/크래시/강제종료 무엇이든, 프로세스가 사라지면
+// OS 가 job 핸들을 닫으며 job 에 속한 자식 mediamtx 를 강제 종료한다.
+// 다른 OS 에서는 no-op (Unix 는 정상 종료 시 stopProcess() 가 처리).
+// ============================================================
+
+void MediaRelayManager::setupJobObject()
+{
+#if defined(Q_OS_WIN)
+    HANDLE job = CreateJobObjectW(nullptr, nullptr);
+    if (!job) {
+        return;
+    }
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION info;
+    ZeroMemory(&info, sizeof(info));
+    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &info, sizeof(info))) {
+        CloseHandle(job);
+        return;
+    }
+    m_jobHandle = job;   // 핸들을 앱 수명 동안 보유 → 앱 사망 시 자동으로 닫혀 자식 종료
+#endif
+}
+
+void MediaRelayManager::assignToJobObject(qint64 pid)
+{
+#if defined(Q_OS_WIN)
+    if (!m_jobHandle || pid <= 0) {
+        return;
+    }
+    HANDLE hproc = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE,
+                               FALSE, static_cast<DWORD>(pid));
+    if (!hproc) {
+        return;
+    }
+    if (AssignProcessToJobObject(static_cast<HANDLE>(m_jobHandle), hproc)) {
+        emit logMessage(QStringLiteral("MediaMTX 를 Job Object 에 연결(앱 종료/크래시 시 동반 종료)."), 0);
+    } else {
+        // 실패해도 치명적이지 않다(정상 종료 시 kill, 다음 실행 시 PID 회수가 폴백).
+        emit logMessage(QStringLiteral("Job Object 연결 실패(폴백: 종료 시 kill / 재실행 시 회수)."), 0);
+    }
+    CloseHandle(hproc);
+#else
+    Q_UNUSED(pid);
+#endif
+}
+
+void MediaRelayManager::closeJobObject()
+{
+#if defined(Q_OS_WIN)
+    if (m_jobHandle) {
+        CloseHandle(static_cast<HANDLE>(m_jobHandle));
+        m_jobHandle = nullptr;
+    }
+#endif
 }

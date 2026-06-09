@@ -1215,8 +1215,14 @@ void MainWindow::addChannel()
     viewer->setStreamInfo(sourceUrl, info->relayEnabled, relayPath);
     m_channelListOrder.append(viewer);
     m_gridIndexes.insert(viewer, firstFreeGridIndex());
-    syncRelayManager();
-    viewer->play(url, name);
+    const bool relayOk = syncRelayManager();
+    if (!info->relayEnabled || relayOk) {
+        viewer->play(url, name);
+    } else {
+        // relay 적용/기동 실패 시 재생을 시작하지 않는다(무의미한 재접속 루프 방지).
+        appendLog(QString("[%1] relay 준비 실패 — 재생 보류. 상태 확인 후 채널 수정으로 재시도하세요.").arg(name),
+                  LogLevel::WARN);
+    }
     addChannelToTable(viewer);
     selectChannelRowFromClick(m_channelTable->rowCount() - 1, Qt::NoModifier, false);
 
@@ -1259,8 +1265,12 @@ void MainWindow::editChannel(VlcWidget *viewer)
     viewer->setAutoReconnect(edited->autoReconnect);
     viewer->setStreamInfo(sourceUrl, edited->relayEnabled, relayPath);
     if (streamChanged) {
-        syncRelayManager();
-        viewer->play(url, name);
+        const bool relayOk = syncRelayManager();
+        if (!edited->relayEnabled || relayOk) {
+            viewer->play(url, name);
+        } else {
+            appendLog(QString("[%1] relay 준비 실패 — 재생 보류.").arg(name), LogLevel::WARN);
+        }
     } else if (nameChanged) {
         viewer->setChannelInfo(name, url);
     }
