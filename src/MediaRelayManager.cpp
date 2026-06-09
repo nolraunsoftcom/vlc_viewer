@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QFile>
 #include <QFileInfo>
 #include <QHostAddress>
 #include <QSaveFile>
@@ -311,17 +312,21 @@ bool MediaRelayManager::startProcess()
     }
     emit logMessage(QStringLiteral("MediaMTX 실행 파일: %1").arg(executable), 0);
 
-    // 이전 실행에서 남은 고아 mediamtx 가 포트를 잡고 있으면, 새 인스턴스가 bind 실패한다.
-    // 충돌이 감지되면 정리 후 포트가 비워질 때까지 대기한다.
+    // 이전 실행에서 남은 "우리" mediamtx 가 포트를 잡고 있으면 새 인스턴스가 bind 실패한다.
+    // 단, 임의의 mediamtx 를 이름으로 일괄 종료하지 않는다(다른 인스턴스/사용자 프로세스 보호).
+    // 우리가 기록한 PID 가 여전히 mediamtx 일 때만 그 PID 를 회수한다.
     if (isPortInUse(RTSP_PORT) || isPortInUse(API_PORT)) {
         emit logMessage(
-            QStringLiteral("포트 %1/%2 가 이미 사용 중입니다(이전 mediamtx 잔존 추정). 정리합니다.")
+            QStringLiteral("포트 %1/%2 사용 중. 우리가 띄운 mediamtx 잔존 여부를 확인합니다.")
                 .arg(RTSP_PORT).arg(API_PORT),
             2);
-        killStaleProcesses();
-        if (!waitForPortsFree(3000)) {
+        if (reclaimStaleProcess()) {
+            waitForPortsFree(3000);
+        }
+        if (isPortInUse(RTSP_PORT) || isPortInUse(API_PORT)) {
             emit logMessage(
-                QStringLiteral("포트 %1/%2 가 여전히 점유 중입니다. 다른 프로그램이 사용 중일 수 있습니다.")
+                QStringLiteral("포트 %1/%2 가 다른 프로세스에 점유되어 있습니다(우리 mediamtx 아님). "
+                               "임의 종료하지 않습니다. 점유 중인 프로그램을 확인하세요.")
                     .arg(RTSP_PORT).arg(API_PORT),
                 3);
             return false;
@@ -340,10 +345,10 @@ bool MediaRelayManager::startProcess()
         return false;
     }
 
+    const qint64 pid = m_process->processId();
+    writePidFile(pid);   // 다음 실행에서 고아 회수에 사용
     emit logMessage(
-        QStringLiteral("MediaMTX 시작됨 (pid=%1, config=%2).")
-            .arg(m_process->processId())
-            .arg(configPath()),
+        QStringLiteral("MediaMTX 시작됨 (pid=%1, config=%2).").arg(pid).arg(configPath()),
         1);
     return true;
 }
@@ -367,6 +372,8 @@ void MediaRelayManager::stopProcess()
         m_process->waitForFinished(1000);
     }
 #endif
+
+    removePidFile();   // 정상 종료 → 고아 아님. 다음 실행이 죽은 PID 를 오인하지 않도록 제거.
 }
 
 bool MediaRelayManager::isPortInUse(quint16 port) const
@@ -394,20 +401,106 @@ bool MediaRelayManager::waitForPortsFree(int timeoutMs)
     return !isPortInUse(RTSP_PORT) && !isPortInUse(API_PORT);
 }
 
-void MediaRelayManager::killStaleProcesses()
+QString MediaRelayManager::pidFilePath() const
 {
-    // 우리 프로세스가 돌고 있는 동안에는 호출하지 않는다(이름 기반 kill 이 우리 것까지 죽임).
-    if (m_process && m_process->state() != QProcess::NotRunning) {
+    const QString dir = QDir::homePath() + QStringLiteral("/.ziilab");
+    QDir().mkpath(dir);
+    return dir + QStringLiteral("/mediamtx.pid");
+}
+
+void MediaRelayManager::writePidFile(qint64 pid)
+{
+    QSaveFile file(pidFilePath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         return;
     }
+    file.write(QByteArray::number(pid));
+    file.commit();
+}
 
+void MediaRelayManager::removePidFile()
+{
+    QFile::remove(pidFilePath());
+}
+
+qint64 MediaRelayManager::readPidFile() const
+{
+    QFile file(pidFilePath());
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return -1;
+    }
+    bool ok = false;
+    const qint64 pid = QString::fromLatin1(file.readAll()).trimmed().toLongLong(&ok);
+    return ok ? pid : -1;
+}
+
+bool MediaRelayManager::isMediamtxProcess(qint64 pid) const
+{
+    if (pid <= 0) return false;
+
+    QProcess query;
+#if defined(Q_OS_WIN)
+    // tasklist 는 해당 PID 가 없으면 "INFO: No tasks..." 를 출력한다(= mediamtx 미포함).
+    query.start(QStringLiteral("tasklist"),
+                {QStringLiteral("/FI"), QStringLiteral("PID eq %1").arg(pid),
+                 QStringLiteral("/FO"), QStringLiteral("CSV"), QStringLiteral("/NH")});
+#else
+    query.start(QStringLiteral("ps"),
+                {QStringLiteral("-p"), QString::number(pid),
+                 QStringLiteral("-o"), QStringLiteral("comm=")});
+#endif
+    if (!query.waitForStarted(1500)) return false;
+    if (!query.waitForFinished(2000)) {
+        query.kill();
+        return false;
+    }
+    const QString out = QString::fromLocal8Bit(query.readAllStandardOutput());
+    return out.contains(QStringLiteral("mediamtx"), Qt::CaseInsensitive);
+}
+
+bool MediaRelayManager::killProcessByPid(qint64 pid)
+{
+    if (pid <= 0) return false;
 #if defined(Q_OS_WIN)
     const int rc = QProcess::execute(QStringLiteral("taskkill"),
-                                     {QStringLiteral("/F"), QStringLiteral("/IM"),
-                                      QStringLiteral("mediamtx.exe")});
+                                     {QStringLiteral("/F"), QStringLiteral("/PID"),
+                                      QString::number(pid)});
 #else
-    const int rc = QProcess::execute(QStringLiteral("pkill"),
-                                     {QStringLiteral("-x"), QStringLiteral("mediamtx")});
+    const int rc = QProcess::execute(QStringLiteral("kill"),
+                                     {QStringLiteral("-9"), QString::number(pid)});
 #endif
-    emit logMessage(QStringLiteral("잔존 mediamtx 정리 시도 (rc=%1).").arg(rc), 0);
+    return rc == 0;
+}
+
+bool MediaRelayManager::reclaimStaleProcess()
+{
+    // 우리 프로세스가 살아있으면 회수 대상 아님.
+    if (m_process && m_process->state() != QProcess::NotRunning) {
+        return false;
+    }
+
+    const qint64 pid = readPidFile();
+    if (pid <= 0) {
+        emit logMessage(QStringLiteral("이전 mediamtx PID 기록이 없습니다(회수 대상 없음)."), 0);
+        return false;
+    }
+
+    // PID 재사용 방지: 기록된 PID 가 지금도 mediamtx 일 때만 종료한다.
+    if (!isMediamtxProcess(pid)) {
+        emit logMessage(
+            QStringLiteral("기록된 PID %1 는 더 이상 mediamtx 가 아닙니다(죽었거나 재사용됨). 종료하지 않습니다.")
+                .arg(pid),
+            0);
+        removePidFile();
+        return false;
+    }
+
+    emit logMessage(QStringLiteral("우리가 띄웠던 잔존 mediamtx 회수 (pid=%1).").arg(pid), 2);
+    const bool ok = killProcessByPid(pid);
+    if (ok) {
+        removePidFile();
+    } else {
+        emit logMessage(QStringLiteral("PID %1 종료 실패.").arg(pid), 3);
+    }
+    return ok;
 }

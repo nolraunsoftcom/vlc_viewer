@@ -51,6 +51,14 @@ private:
 
     // robustness 헬퍼
     bool isPortInUse(quint16 port) const;     // 127.0.0.1:<port> 점유 여부 탐지
-    void killStaleProcesses();                // 이전 실행에서 남은(고아) mediamtx 정리
     bool waitForPortsFree(int timeoutMs);     // 포트가 비워질 때까지 대기
+
+    // 고아 프로세스 회수: 이름 기반 일괄 kill 대신, "우리가 띄운 PID" 만 검증 후 종료한다.
+    QString pidFilePath() const;              // 우리가 띄운 mediamtx PID 기록 파일
+    void writePidFile(qint64 pid);
+    void removePidFile();
+    qint64 readPidFile() const;
+    bool isMediamtxProcess(qint64 pid) const; // PID 재사용 방지: 실제 mediamtx 인지 확인
+    bool killProcessByPid(qint64 pid);        // 특정 PID 만 종료
+    bool reclaimStaleProcess();               // PID 파일 기준 우리 고아 mediamtx 만 회수
 };

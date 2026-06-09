@@ -109,9 +109,14 @@ paths:
   voxl1:
     source: rtsp://169.254.4.1:8900/live
     sourceOnDemand: false
-    rtspTransport: udp
+    rtspTransport: tcp
     record: false
 ```
+
+> 변경 이력: upstream(`VOXL -> MediaMTX`)은 초기 `udp` 기본값에서 `tcp`로 전환했다(앱 v0.0.1).
+> UDP에서 RTSP 세션 keepalive/RTP 흐름이 끊겨 ~20-30초 주기로 stream 이 teardown 되던
+> 현상과, 손실 구간 매크로블로킹(깨짐)을 줄이기 위함이다. 저지연이 더 중요한 프로파일에서는
+> `udp` 로 되돌릴 수 있다.
 
 `sourceOnDemand: false`는 MediaMTX가 시작될 때 VOXL upstream을 바로 붙잡게 한다. 제품형에서 source 상태를 명확히 감시하기 쉽다. 배터리/무선 자원을 아껴야 하는 프로파일은 나중에 `true`를 검토한다.
 
@@ -120,7 +125,7 @@ paths:
 - `8554/tcp`: viewer가 접속하는 RTSP server. localhost 구간이라 TCP 재전송 지연의 영향이 사실상 없고, LibVLC 렌더링 안정성이 더 좋다.
 - `9997/tcp`: viewer 내부 관리용 Control API, localhost 바인딩
 
-주의: viewer와 MediaMTX 사이는 localhost TCP로 둔다. 지연에 민감한 무선 구간은 path의 `rtspTransport: udp`로 VOXL upstream에 적용한다. 즉 제품 기본값은 `VOXL -> MediaMTX: UDP`, `MediaMTX -> viewer: TCP(localhost)` 조합이다.
+주의: viewer와 MediaMTX 사이는 localhost TCP로 둔다. VOXL upstream도 path의 `rtspTransport: tcp`로 둔다(앱 v0.0.1 기준). 즉 제품 기본값은 `VOXL -> MediaMTX: TCP`, `MediaMTX -> viewer: TCP(localhost)` 조합이다. UDP는 손실 구간에서 RTP가 끊겨 stream teardown/깨짐을 유발했다. 저지연 우선 프로파일에서만 `udp` 재검토.
 
 ### 3. 실행
 
