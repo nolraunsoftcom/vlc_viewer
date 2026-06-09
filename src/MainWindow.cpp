@@ -993,6 +993,16 @@ void MainWindow::openFullscreenTab(VlcWidget *viewer)
         }
     }
 
+    // relay 채널이 아직 연결되지 않았으면(주로 relay 미준비로 재생이 보류된 idle 상태)
+    // 전체화면에서 새 재접속 루프를 시작하지 않는다. relay 가 준비되어 채널이 연결된 뒤
+    // 다시 시도하면 된다. (직결 채널은 이 정책에서 제외)
+    if (viewer->relayEnabled() && viewer->status() != VlcWidget::Status::Connected) {
+        showToast(QStringLiteral("전체화면을 열 수 없음"),
+                  QStringLiteral("채널이 아직 연결되지 않았습니다. 연결 후 다시 시도하세요."),
+                  LogLevel::WARN);
+        return;
+    }
+
     // 그리드 원본은 유지 — 탭엔 동일 URL의 독립 스트림을 띄움
     auto *fullViewer = new VlcWidget(m_vlcInstance, nullptr);
     fullViewer->setFullscreenMode(true);
