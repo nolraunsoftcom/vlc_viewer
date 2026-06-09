@@ -1184,10 +1184,16 @@ void MainWindow::loadChannels()
         ++channelNumber;
     }
 
-    syncRelayManager();
+    const bool relayOk = syncRelayManager();
 
     for (auto *viewer : loadedViewers) {
-        viewer->play(viewer->url(), viewer->name());
+        if (viewer->relayEnabled() && !relayOk) {
+            // 앱 시작 시 relay 기동 실패 → relay 채널 재생 보류(무의미한 재접속 루프 방지).
+            appendLog(QString("Channel loaded (relay 미준비 — 재생 보류): %1").arg(viewer->name()),
+                      LogLevel::WARN);
+        } else {
+            viewer->play(viewer->url(), viewer->name());
+        }
         addChannelToTable(viewer);
         appendLog(QString("Channel loaded: %1 (%2)").arg(viewer->name(), channelListUrlText(viewer)),
                   LogLevel::DEBUG);
@@ -1266,11 +1272,18 @@ void MainWindow::editChannel(VlcWidget *viewer)
     viewer->setStreamInfo(sourceUrl, edited->relayEnabled, relayPath);
     if (streamChanged) {
         const bool relayOk = syncRelayManager();
-        if (!edited->relayEnabled || relayOk) {
-            viewer->play(url, name);
-        } else {
-            appendLog(QString("[%1] relay 준비 실패 — 재생 보류.").arg(name), LogLevel::WARN);
+        if (edited->relayEnabled && !relayOk) {
+            // relay 적용 실패 → 변경을 커밋하지 않고 이전 설정으로 롤백한다.
+            // (아래의 전체화면 복제본 재생 / table 갱신 / saveChannels 까지 모두 건너뛰어
+            //  상태 불일치와 실패 URL 재접속 루프를 방지.)
+            appendLog(QString("[%1] relay 준비 실패 — 변경 취소(이전 설정 복원).").arg(name), LogLevel::WARN);
+            viewer->setAutoReconnect(current.autoReconnect);
+            viewer->setStreamInfo(current.sourceUrl, current.relayEnabled,
+                                  MediaRelayManager::normalizeRelayPath(current.relayPath));
+            syncRelayManager();   // 이전 구성으로 relay 복원
+            return;
         }
+        viewer->play(url, name);
     } else if (nameChanged) {
         viewer->setChannelInfo(name, url);
     }
