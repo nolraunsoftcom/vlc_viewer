@@ -130,8 +130,15 @@ bool MediaRelayManager::ensureRunning()
         QStringLiteral("MediaMTX config 작성: %1 (channels=%2).").arg(configPath()).arg(m_channels.size()), 1);
 
     if (alreadyRunning) {
-        emit logMessage(QStringLiteral("relay 설정 변경 감지 → MediaMTX 재시작."), 1);
-        stopProcess();
+        // 채널 추가/수정/삭제 시 프로세스를 재시작하지 않는다.
+        // (재시작하면 모든 path 가 끊겨 다른 채널의 활성 스트림까지 같이 끊긴다 — 실제 버그.)
+        // writeConfig() 는 QSaveFile 의 원자적 rename 으로 기록하며, 이것이 MediaMTX 의 config 파일
+        // 감시를 트리거해 hot-reload 된다. reload 는 "변경된 path 만" 갱신하고, 미변경 path(다른
+        // 채널의 활성 스트림)와 그 reader 는 유지한다. (검증: 원자 rename → reload 트리거 + 무재시작)
+        m_lastConfigSignature = signature;
+        emit logMessage(
+            QStringLiteral("relay 설정 변경 → MediaMTX hot-reload (무재시작, 기존 스트림 유지)."), 1);
+        return true;
     }
 
     if (!startProcess()) {
