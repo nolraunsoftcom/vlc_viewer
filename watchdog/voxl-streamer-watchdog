@@ -1,0 +1,246 @@
+#!/bin/bash
+# voxl-streamer-watchdog
+#
+# 1) keepalive: voxl-streamer 에 로컬 더미 RTSP 리더 1개를 상시 연결해 클라이언트 수가
+#    0 이 되지 않게 한다 -> HW 인코더(msm_vidc)가 close/reopen 되지 않아 재오픈 wedge 회피.
+# 2) process watchdog: voxl-streamer 프로세스/서비스가 죽으면 빠르게 재시작한다.
+# 3) stream watchdog: 새 RTSP probe client 를 만들지 않는다. keepalive pipeline 자체가
+#    video RTP buffer 를 받을 때마다 timestamp 를 갱신하고, 그 값이 오래되면 stall 로 본다.
+#
+# ModalAI voxl-static-ip-watcher 스타일(bash + jq conf + systemd) 을 따른다.
+
+CONFIG_PATH="/etc/modalai/voxl-streamer-watchdog.conf"
+
+create_default_config() {
+    mkdir -p "$(dirname "$CONFIG_PATH")"
+    tee "$CONFIG_PATH" > /dev/null <<EOF
+{
+  "debug": 1,
+  "rtsp_url": "rtsp://127.0.0.1:8900/live",
+  "keepalive_restart_delay_s": 2,
+  "process_check_interval_s": 2,
+  "process_min_restart_interval_s": 5,
+  "stream_watchdog_enabled": 1,
+  "stream_check_interval_s": 5,
+  "last_buffer_path": "/run/ziilab-rtsp-last-buffer",
+  "last_buffer_max_age_s": 15,
+  "stream_fail_threshold": 3,
+  "stream_min_restart_interval_s": 300,
+  "grace_after_restart_s": 20
+}
+EOF
+    echo "Default config created at $CONFIG_PATH"
+    exit 0
+}
+
+# defaults (conf 로 덮어쓸 수 있음)
+DEBUG=1
+RTSP_URL="rtsp://127.0.0.1:8900/live"
+KEEPALIVE_RESTART_DELAY=2
+PROCESS_CHECK_INTERVAL=2
+PROCESS_MIN_RESTART_INTERVAL=5
+STREAM_WATCHDOG_ENABLED=1
+STREAM_CHECK_INTERVAL=5
+LAST_BUFFER_PATH="/run/ziilab-rtsp-last-buffer"
+LAST_BUFFER_MAX_AGE=15
+STREAM_FAIL_THRESHOLD=3
+STREAM_MIN_RESTART_INTERVAL=300
+GRACE_AFTER_RESTART=20
+
+load_config() {
+    if [[ -f "$CONFIG_PATH" ]] && command -v jq >/dev/null 2>&1; then
+        DEBUG=$(jq -r '.debug // 1' "$CONFIG_PATH")
+        RTSP_URL=$(jq -r '.rtsp_url // "rtsp://127.0.0.1:8900/live"' "$CONFIG_PATH")
+        KEEPALIVE_RESTART_DELAY=$(jq -r '.keepalive_restart_delay_s // 2' "$CONFIG_PATH")
+        PROCESS_CHECK_INTERVAL=$(jq -r '.process_check_interval_s // 2' "$CONFIG_PATH")
+        PROCESS_MIN_RESTART_INTERVAL=$(jq -r '.process_min_restart_interval_s // 5' "$CONFIG_PATH")
+        STREAM_WATCHDOG_ENABLED=$(jq -r '.stream_watchdog_enabled // 1' "$CONFIG_PATH")
+        STREAM_CHECK_INTERVAL=$(jq -r '.stream_check_interval_s // 5' "$CONFIG_PATH")
+        LAST_BUFFER_PATH=$(jq -r '.last_buffer_path // "/run/ziilab-rtsp-last-buffer"' "$CONFIG_PATH")
+        LAST_BUFFER_MAX_AGE=$(jq -r '.last_buffer_max_age_s // 15' "$CONFIG_PATH")
+        STREAM_FAIL_THRESHOLD=$(jq -r '.stream_fail_threshold // 3' "$CONFIG_PATH")
+        STREAM_MIN_RESTART_INTERVAL=$(jq -r '.stream_min_restart_interval_s // 300' "$CONFIG_PATH")
+        GRACE_AFTER_RESTART=$(jq -r '.grace_after_restart_s // 20' "$CONFIG_PATH")
+    fi
+}
+
+while getopts "c" opt; do
+    case $opt in
+        c) create_default_config ;;
+        *) echo "Usage: $0 [-c]" >&2; exit 1 ;;
+    esac
+done
+
+load_config
+
+log() { echo "$(date +'%F %T') [streamer-watchdog] $*"; }
+dbg() { [[ "$DEBUG" != "0" ]] && log "$*"; }
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        log "ERROR: required command not found: $1"
+        exit 1
+    fi
+}
+
+is_enabled() {
+    [[ "$1" != "0" && "$1" != "false" && "$1" != "False" ]]
+}
+
+require_command gst-launch-1.0
+require_command systemctl
+require_command pgrep
+
+HAVE_PROGRESSREPORT=0
+if command -v gst-inspect-1.0 >/dev/null 2>&1 && gst-inspect-1.0 progressreport >/dev/null 2>&1; then
+    HAVE_PROGRESSREPORT=1
+elif is_enabled "$STREAM_WATCHDOG_ENABLED"; then
+    log "WARN: GStreamer progressreport element not found; stream watchdog disabled, keepalive still active"
+    STREAM_WATCHDOG_ENABLED=0
+fi
+
+LAST_BUFFER_DIR=$(dirname "$LAST_BUFFER_PATH")
+mkdir -p "$LAST_BUFFER_DIR"
+rm -f "$LAST_BUFFER_PATH"
+
+mark_buffer_seen() {
+    date +%s > "$LAST_BUFFER_PATH"
+}
+
+run_basic_keepalive_pipeline() {
+    gst-launch-1.0 -q \
+        rtspsrc location="$RTSP_URL" protocols=tcp latency=100 name=src \
+        src. ! queue ! application/x-rtp,media=video ! fakesink sync=false async=false \
+        >/dev/null 2>&1
+}
+
+run_monitored_keepalive_pipeline() {
+    set -o pipefail
+    gst-launch-1.0 \
+        rtspsrc location="$RTSP_URL" protocols=tcp latency=100 name=src \
+        src. ! queue ! application/x-rtp,media=video \
+        ! progressreport update-freq=1 silent=false \
+        ! fakesink sync=false async=false \
+        2>&1 | while IFS= read -r _line; do
+            mark_buffer_seen
+        done
+    return "${PIPESTATUS[0]}"
+}
+
+KA_PID=""
+GST_PID=""
+
+keepalive_loop() {
+    trap '[[ -n "$GST_PID" ]] && kill "$GST_PID" 2>/dev/null; exit 0' TERM INT
+
+    while true; do
+        if is_enabled "$STREAM_WATCHDOG_ENABLED" && [[ "$HAVE_PROGRESSREPORT" == "1" ]]; then
+            run_monitored_keepalive_pipeline &
+        else
+            run_basic_keepalive_pipeline &
+        fi
+        GST_PID=$!
+        wait "$GST_PID"
+        GST_PID=""
+        sleep "$KEEPALIVE_RESTART_DELAY"
+    done
+}
+
+start_keepalive() {
+    keepalive_loop &
+    KA_PID=$!
+    dbg "keepalive started (loop pid=$KA_PID) -> $RTSP_URL"
+}
+
+stop_keepalive() {
+    [[ -n "$KA_PID" ]] && kill "$KA_PID" 2>/dev/null
+    [[ -n "$KA_PID" ]] && wait "$KA_PID" 2>/dev/null
+    KA_PID=""
+}
+
+cleanup() {
+    dbg "shutting down; stopping keepalive"
+    stop_keepalive
+    exit 0
+}
+trap cleanup TERM INT
+
+streamer_pid() { pgrep -x voxl-streamer | head -1; }
+
+restart_streamer() {
+    local reason="$1"
+    log "$reason -> restarting voxl-streamer"
+    systemctl restart voxl-streamer
+    rm -f "$LAST_BUFFER_PATH"
+    sleep "$GRACE_AFTER_RESTART"
+}
+
+log "started: keepalive + watchdog, url=$RTSP_URL, process_check=${PROCESS_CHECK_INTERVAL}s, stream_watchdog=${STREAM_WATCHDOG_ENABLED}, last_buffer_path=$LAST_BUFFER_PATH"
+start_keepalive
+
+stream_fail_count=0
+last_process_restart=0
+last_stream_restart=0
+last_process_check=0
+last_stream_check=0
+
+while true; do
+    sleep 1
+    now=$(date +%s)
+
+    # keepalive 살아있나
+    if ! kill -0 "$KA_PID" 2>/dev/null; then
+        dbg "keepalive loop died; restarting"
+        start_keepalive
+    fi
+
+    if [[ $(( now - last_process_check )) -ge "$PROCESS_CHECK_INTERVAL" ]]; then
+        last_process_check=$now
+
+        pid=$(streamer_pid)
+        if [[ -z "$pid" ]] || ! systemctl is-active --quiet voxl-streamer; then
+            if [[ $(( now - last_process_restart )) -ge "$PROCESS_MIN_RESTART_INTERVAL" ]]; then
+                restart_streamer "voxl-streamer service/process is not active"
+                last_process_restart=$now
+                stream_fail_count=0
+                last_stream_check=$(date +%s)
+            else
+                dbg "voxl-streamer not active but within process restart interval"
+            fi
+            continue
+        fi
+    fi
+
+    if ! is_enabled "$STREAM_WATCHDOG_ENABLED"; then
+        continue
+    fi
+
+    if [[ $(( now - last_stream_check )) -lt "$STREAM_CHECK_INTERVAL" ]]; then
+        continue
+    fi
+    last_stream_check=$now
+
+    last_buffer_ts=0
+    if [[ -f "$LAST_BUFFER_PATH" ]]; then
+        last_buffer_ts=$(cat "$LAST_BUFFER_PATH" 2>/dev/null)
+    fi
+
+    if [[ "$last_buffer_ts" =~ ^[0-9]+$ ]] && [[ $(( now - last_buffer_ts )) -le "$LAST_BUFFER_MAX_AGE" ]]; then
+        [[ "$stream_fail_count" -gt 0 ]] && dbg "keepalive buffer timestamp healthy; reset fail count"
+        stream_fail_count=0
+    else
+        stream_fail_count=$(( stream_fail_count + 1 ))
+        log "stream buffer stale ${stream_fail_count}/${STREAM_FAIL_THRESHOLD} (last=${last_buffer_ts:-none}, max_age=${LAST_BUFFER_MAX_AGE}s)"
+    fi
+
+    if [[ "$stream_fail_count" -ge "$STREAM_FAIL_THRESHOLD" ]]; then
+        if [[ $(( now - last_stream_restart )) -ge "$STREAM_MIN_RESTART_INTERVAL" ]]; then
+            restart_streamer "stream stalled: keepalive buffer timestamp stale"
+            last_stream_restart=$now
+            stream_fail_count=0
+            last_stream_check=$(date +%s)
+        else
+            dbg "stream stalled but within stream restart interval (${STREAM_MIN_RESTART_INTERVAL}s)"
+        fi
+    fi
+done

@@ -113,6 +113,7 @@ signals:
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;   // 재연결 버튼 중앙 배치 갱신
 
 private:
     libvlc_instance_t *m_vlcInstance = nullptr;
@@ -124,6 +125,7 @@ private:
     QLabel *m_recBadge = nullptr;
     QPushButton *m_snapshotBtn = nullptr;
     QPushButton *m_recordBtn = nullptr;
+    QPushButton *m_reconnectOverlayBtn = nullptr;   // give-up(Failed) 시 그리드 중앙에 뜨는 수동 재연결 버튼
     QString m_url;
     QString m_name;
     QString m_sourceUrl;
@@ -132,15 +134,23 @@ private:
     bool m_autoReconnect = true;
     bool m_isFullscreen = false;
     bool m_reconnecting = false;
-    bool m_hasConnectedOnce = false;
+    bool m_hasConnectedOnce = false;     // 실제 영상 데이터를 한 번이라도 받은 적 있는가
+    bool m_dataConfirmed = false;        // 현재 세션에서 실제 프레임 수신 확정 여부
     Status m_status = Status::Idle;
     void setStatus(Status s);
     // 재접속 정책 (relay TIME_WAIT 폭증 방지): 빠른 포기 + exponential backoff + 자동 중단.
-    // 카메라 OFF 시 5초 간격 무한 재시도로 로컬 RTSP 연결이 누적되던 문제 대응.
-    static constexpr int INITIAL_MAX_RECONNECT = 3;        // 한 번도 연결된 적 없는 채널(카메라 OFF 등)
+    // 직접 RTSP 카메라 OFF 는 빠르게 포기하되, relay 는 MediaMTX 가 원본 RTSP 를 준비할 시간을 둔다.
+    static constexpr int INITIAL_DIRECT_MAX_RECONNECT = 3; // 한 번도 연결된 적 없는 직접 RTSP 채널
+    static constexpr int INITIAL_RELAY_MAX_RECONNECT = 24; // relay source 준비 대기: 5초 x 24 = 최대 약 2분
     static constexpr int ESTABLISHED_MAX_RECONNECT = 10;   // 연결된 적 있는 채널(현장 흔들림 복구 유지)
-    static constexpr int RECONNECT_BASE_MS = 5000;         // backoff 기준: 5 → 10 → 20 → 40 → 60(s)
+    static constexpr int RECONNECT_BASE_MS = 5000;         // (원격 직접 RTSP) backoff 기준: 5 → 10 → 20 → 40 → 60(s)
     static constexpr int RECONNECT_MAX_INTERVAL_MS = 60000;
+    static constexpr int RELAY_RECONNECT_MS = 2000;        // relay(로컬 MediaMTX): backoff 없이 2초 고정 — 소스 복구 즉시 화면 복귀
+
+    // 데이터 수신 워치독: RTSP 세션이 열려도(Playing 이벤트) 실제 프레임이 안 오면
+    // MediaMTX 가 캐시된 트랙정보만 응답하는 "가짜 연결"이다. 이 시간 안에 실제 프레임이
+    // 안 오면 해당 시도를 실패로 간주하고 재접속(카운트 증가 → give-up 유도)한다.
+    static constexpr int DATA_CONFIRM_TIMEOUT_MS = 5000;
 
     // 녹화 상태
     RecState m_recState = RecState::Idle;
@@ -182,7 +192,11 @@ private:
     bool isCurrentRecordingEventSource(const void *eventSource) const;
     void showStatus(const QString &text);
     void showContextMenu(const QPoint &globalPos);
+    void updateReconnectButton();      // 상태에 따라 재연결 버튼 표시/숨김 + 중앙 배치
     void tryReconnect();
+    void onDataWatchdogTimeout();      // 데이터 미수신 시 가짜 연결로 판단 → 실패 처리 후 재접속
+    void confirmDataFlowing();         // 실제 프레임 수신 확정 → '연결됨' 확정 + 카운터 리셋
+    int maxReconnectAttempts() const;
     int reconnectIntervalMs() const;   // 현재 상태 기준 다음 재시도 간격(backoff)
     void scheduleReconnect();          // giveUp/autoReconnect 확인 후 backoff 간격으로 타이머 무장
     QFuture<void> cleanupPlayer();
@@ -207,6 +221,7 @@ private:
     QString makeRecordingPath() const;
 
     QTimer *m_reconnectTimer = nullptr;
+    QTimer *m_dataWatchdogTimer = nullptr;   // Playing 후 실제 프레임 수신 감시 (DATA_CONFIRM_TIMEOUT_MS)
     int m_reconnectCount = 0;
     bool m_giveUp = false;   // 자동 재연결 포기(Failed) 상태 — 수동 reconnect/재생 전까지 재무장 금지
     QFuture<void> m_playerCleanup;

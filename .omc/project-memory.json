@@ -92,27 +92,33 @@
   },
   "hotPaths": [
     {
+      "path": "src/VlcWidget.cpp",
+      "accessCount": 32,
+      "lastAccessed": 1781006771605,
+      "type": "file"
+    },
+    {
       "path": "src/MediaRelayManager.cpp",
-      "accessCount": 22,
-      "lastAccessed": 1780998177147,
+      "accessCount": 23,
+      "lastAccessed": 1781006139608,
       "type": "file"
     },
     {
       "path": "src/MainWindow.cpp",
-      "accessCount": 15,
-      "lastAccessed": 1780999004053,
-      "type": "file"
-    },
-    {
-      "path": "src/VlcWidget.cpp",
-      "accessCount": 15,
-      "lastAccessed": 1780999496019,
+      "accessCount": 16,
+      "lastAccessed": 1781006807141,
       "type": "file"
     },
     {
       "path": "CMakeLists.txt",
       "accessCount": 12,
       "lastAccessed": 1780999513795,
+      "type": "file"
+    },
+    {
+      "path": "src/VlcWidget.h",
+      "accessCount": 12,
+      "lastAccessed": 1781006560656,
       "type": "file"
     },
     {
@@ -125,12 +131,6 @@
       "path": "src/MediaRelayManager.h",
       "accessCount": 6,
       "lastAccessed": 1780998117339,
-      "type": "file"
-    },
-    {
-      "path": "src/VlcWidget.h",
-      "accessCount": 6,
-      "lastAccessed": 1780999564648,
       "type": "file"
     },
     {
@@ -170,9 +170,21 @@
       "type": "file"
     },
     {
+      "path": "docs/2026-06-06-수정사항.md",
+      "accessCount": 2,
+      "lastAccessed": 1781005928380,
+      "type": "file"
+    },
+    {
       "path": "README.md",
-      "accessCount": 1,
-      "lastAccessed": 1780979853115,
+      "accessCount": 2,
+      "lastAccessed": 1781005935244,
+      "type": "file"
+    },
+    {
+      "path": "docs/voxl2-rtsp-network-access.md",
+      "accessCount": 2,
+      "lastAccessed": 1781007624183,
       "type": "file"
     },
     {
@@ -182,21 +194,15 @@
       "type": "file"
     },
     {
-      "path": "docs/voxl2-rtsp-network-access.md",
-      "accessCount": 1,
-      "lastAccessed": 1780979871150,
-      "type": "file"
-    },
-    {
-      "path": "docs/2026-06-06-수정사항.md",
-      "accessCount": 1,
-      "lastAccessed": 1780979878632,
-      "type": "file"
-    },
-    {
       "path": "src/ConnectionDialog.h",
       "accessCount": 1,
       "lastAccessed": 1780979879028,
+      "type": "file"
+    },
+    {
+      "path": "docs/2026-06-09-가짜연결-재접속루프-수정.md",
+      "accessCount": 1,
+      "lastAccessed": 1781006862579,
       "type": "file"
     }
   ],

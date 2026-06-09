@@ -5,6 +5,7 @@
 #include <QSizePolicy>
 #include <QDateTime>
 #include <QMouseEvent>
+#include <QResizeEvent>
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QDir>
@@ -123,6 +124,20 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     m_nameLabel->hide();
     m_placeholder->show();
 
+    // 수동 재연결 버튼 — 자동 재연결을 포기(Failed)한 채널 위에 떠서 클릭 한 번으로 재시작.
+    // 평소엔 숨김. resizeEvent/updateReconnectButton 에서 그리드 중앙에 배치한다.
+    m_reconnectOverlayBtn = new QPushButton("재연결", this);
+    m_reconnectOverlayBtn->setCursor(Qt::PointingHandCursor);
+    m_reconnectOverlayBtn->setToolTip("이 채널을 다시 연결합니다");
+    m_reconnectOverlayBtn->setFixedSize(84, 30);
+    m_reconnectOverlayBtn->setStyleSheet(
+        "QPushButton { background-color: #ffffff; color: #333; border: 1px solid #c8c8c8;"
+        " border-radius: 4px; font-size: 12px; font-weight: bold; }"
+        " QPushButton:hover { background-color: #f2f2f2; border-color: #adadad; }"
+        " QPushButton:pressed { background-color: #e6e6e6; }");
+    connect(m_reconnectOverlayBtn, &QPushButton::clicked, this, [this]() { reconnect(); });
+    m_reconnectOverlayBtn->hide();
+
     updateRecordUi();
 
     // 재접속 타이머 (singleShot — 겹침 방지)
@@ -130,6 +145,12 @@ VlcWidget::VlcWidget(libvlc_instance_t *vlcInstance, QWidget *parent)
     m_reconnectTimer->setSingleShot(true);
     m_reconnectTimer->setInterval(5000);
     connect(m_reconnectTimer, &QTimer::timeout, this, &VlcWidget::tryReconnect);
+
+    // 데이터 수신 워치독 (singleShot) — Playing 후 실제 프레임이 안 오면 가짜 연결로 판단.
+    m_dataWatchdogTimer = new QTimer(this);
+    m_dataWatchdogTimer->setSingleShot(true);
+    m_dataWatchdogTimer->setInterval(DATA_CONFIRM_TIMEOUT_MS);
+    connect(m_dataWatchdogTimer, &QTimer::timeout, this, &VlcWidget::onDataWatchdogTimeout);
 }
 
 VlcWidget::~VlcWidget()
@@ -146,8 +167,11 @@ libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
 {
     auto *media = libvlc_media_new_location(m_vlcInstance, url.toUtf8().constData());
     if (!media) return nullptr;
-    // 의견#2: UDP 사용 (:rtsp-tcp 미지정 = VLC 순정 기본값 UDP) — 음영지역 재연결 복구 단축.
-    // TCP 로 되돌리려면 아래에 libvlc_media_add_option(media, ":rtsp-tcp"); 한 줄 추가.
+    // 로컬 relay(127.0.0.1) 레그는 TCP 로 받는다(:rtsp-tcp).
+    // UDP 로 바꿔봤으나 libVLC 가 UDP RTP 를 수신하지 못하는 문제가 있었다(ffmpeg 는 정상 수신,
+    // VLC CLI/임베드 모두 미수신 — libVLC 한정). TCP 는 libVLC 가 정상 수신한다.
+    // TCP 인터리빙 간헐 끊김("unexpected interleaved frame")은 재접속/데이터워치독으로 자동 복구.
+    // 원격 직접 RTSP(비-로컬)는 VLC 순정 UDP 를 그대로 쓴다.
     if (isLocalRtspUrl(url)) {
         libvlc_media_add_option(media, ":rtsp-tcp");
     }
@@ -191,6 +215,10 @@ bool VlcWidget::startPlaybackPlayer(Status pendingStatus)
 {
     waitForPlayerCleanupFinished();
     resetStatsCache();
+
+    // 새 세션: 실제 프레임 수신 전까지 미확정. 워치독은 onPlaying 에서 다시 무장한다.
+    m_dataConfirmed = false;
+    if (m_dataWatchdogTimer) m_dataWatchdogTimer->stop();
 
     libvlc_media_t *media = openPlaybackMedia(m_url);
     if (!media) {
@@ -363,6 +391,7 @@ void VlcWidget::setStatus(Status s)
 {
     m_status = s;
     emit statusChanged(this, s);
+    updateReconnectButton();
 }
 
 QString VlcWidget::statusText(Status s)
@@ -385,6 +414,36 @@ void VlcWidget::showStatus(const QString &text)
     m_placeholder->show();
 }
 
+void VlcWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateReconnectButton();   // 그리드 크기 변경/분할 시 버튼 중앙 재배치
+}
+
+void VlcWidget::updateReconnectButton()
+{
+    if (!m_reconnectOverlayBtn) return;
+
+    // 자동 재연결을 포기한(Failed) 채널에서만 표시. 자동 재시도 중(Reconnecting/Disconnected)
+    // 에는 곧 복구되므로 버튼을 띄우지 않아 깜빡임을 막는다.
+    const bool need = !m_url.isEmpty() && m_status == Status::Failed;
+    if (!need) {
+        m_reconnectOverlayBtn->hide();
+        return;
+    }
+
+    constexpr int topBar = 28;   // infoBar 높이
+    const int bw = m_reconnectOverlayBtn->width();
+    const int bh = m_reconnectOverlayBtn->height();
+    int x = (width() - bw) / 2;
+    int y = topBar + (height() - topBar - bh) / 2 + 34;   // 상태 텍스트 아래로 분리 (겹침 방지)
+    if (x < 0) x = 0;
+    if (y < topBar) y = topBar;
+    m_reconnectOverlayBtn->move(x, y);
+    m_reconnectOverlayBtn->show();
+    m_reconnectOverlayBtn->raise();
+}
+
 void VlcWidget::log(const QString &msg, int level)
 {
     if (m_logCallback) m_logCallback(msg, level);
@@ -394,14 +453,18 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
+        // Playing 이벤트 = RTSP 세션 열림(트랙정보 수신). 아직 "실제 영상 데이터"가 온 게 아니다.
+        // MediaMTX 는 원본이 끊겨도 캐시된 트랙정보로 세션을 열어주므로(가짜 연결), 여기서
+        // 카운터/연결상태를 확정하면 안 된다. 실제 프레임 수신은 refreshStats 에서 확정한다.
         self->m_reconnecting = false;
-        self->m_hasConnectedOnce = true;
-        self->m_reconnectCount = 0;
-        self->m_giveUp = false;
-        self->m_reconnectTimer->stop();
-        self->setStatus(Status::Connected);
         self->m_placeholder->hide();
         self->m_videoSurface->show();
+        self->setStatus(Status::Connecting);   // 수신 대기 (데이터 확정 전)
+
+        // 데이터 워치독 무장: 이 시간 안에 실제 프레임이 안 오면 가짜 연결로 판단해 재접속.
+        if (!self->m_giveUp) {
+            self->m_dataWatchdogTimer->start(DATA_CONFIRM_TIMEOUT_MS);
+        }
 
         // fps 캐시: 연결 성공 시점 1회만 비디오 트랙에서 조회
         self->m_cachedFps = 0.0;
@@ -425,7 +488,7 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
         }
 
         self->m_stats.nominal_fps = self->m_cachedFps;
-        self->log(QString("[%1] Stream connected").arg(self->m_name), 1);
+        self->log(QString("[%1] RTSP 세션 열림 — 영상 데이터 대기").arg(self->m_name), 0);
     }, Qt::QueuedConnection);
 }
 
@@ -434,6 +497,7 @@ void VlcWidget::onEndReached(const libvlc_event_t *, void *data)
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
         if (self->m_giveUp) return;   // 자동 재연결 포기 상태 → 재무장 금지 (TIME_WAIT 폭증 차단)
+        self->m_dataWatchdogTimer->stop();   // 끊김 이벤트가 먼저 옴 → 데이터 워치독 중복 처리 방지
         const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
         if (self->m_recordingUsesPlaybackPlayer
             && (self->m_recState == RecState::Starting || self->m_recState == RecState::Active)) {
@@ -455,6 +519,7 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
         if (self->m_giveUp) return;   // 자동 재연결 포기 상태 → 재무장 금지 (TIME_WAIT 폭증 차단)
+        self->m_dataWatchdogTimer->stop();   // 오류 이벤트가 먼저 옴 → 데이터 워치독 중복 처리 방지
         const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
         if (self->m_recordingUsesPlaybackPlayer
             && (self->m_recState == RecState::Starting || self->m_recState == RecState::Active)) {
@@ -510,13 +575,63 @@ void VlcWidget::onRecordError(const libvlc_event_t *event, void *data)
     }, Qt::QueuedConnection);
 }
 
+void VlcWidget::confirmDataFlowing()
+{
+    // 실제 프레임이 들어왔다 → 비로소 "연결됨" 확정. 재접속 카운터/포기 상태를 리셋한다.
+    if (m_dataConfirmed) return;
+    m_dataConfirmed = true;
+    m_hasConnectedOnce = true;
+    m_reconnectCount = 0;
+    m_giveUp = false;
+    m_reconnecting = false;
+    if (m_dataWatchdogTimer) m_dataWatchdogTimer->stop();
+    m_reconnectTimer->stop();
+
+    setStatus(Status::Connected);
+    m_placeholder->hide();
+    m_videoSurface->show();
+    log(QString("[%1] Stream connected").arg(m_name), 1);
+}
+
+void VlcWidget::onDataWatchdogTimeout()
+{
+    // Playing 후 DATA_CONFIRM_TIMEOUT_MS 동안 실제 프레임이 오지 않음 = 가짜 연결.
+    if (m_giveUp || m_dataConfirmed || !m_player) return;
+
+    log(QString("[%1] %2초간 영상 데이터 없음 → 재접속")
+            .arg(m_name).arg(DATA_CONFIRM_TIMEOUT_MS / 1000), 2);
+
+    // 죽은 세션을 즉시 정리해 TIME_WAIT 체류를 줄이고, 카운트되는 재접속을 예약한다.
+    // (scheduleReconnect → tryReconnect 에서 m_reconnectCount++ → maxAttempts 도달 시 give-up)
+    m_reconnecting = true;
+    cleanupPlayer();
+    resetStatsCache();
+    setStatus(Status::Disconnected);
+    showStatus("영상 없음 — 재접속");
+    scheduleReconnect();
+}
+
+int VlcWidget::maxReconnectAttempts() const
+{
+    if (m_hasConnectedOnce) {
+        return ESTABLISHED_MAX_RECONNECT;
+    }
+    return m_relayEnabled ? INITIAL_RELAY_MAX_RECONNECT : INITIAL_DIRECT_MAX_RECONNECT;
+}
+
 int VlcWidget::reconnectIntervalMs() const
 {
-    // 한 번도 연결 안 된 채널(카메라 OFF 등)은 짧게 시도 후 빠르게 포기.
+    // relay(127.0.0.1, MediaMTX)는 로컬이라 재접속 비용이 싸고, 소스(스트리머) 복구 시
+    // "즉시 화면 복귀" 체감이 중요하므로 backoff 없이 짧은 고정 간격을 쓴다.
+    // (loopback이라 backoff 의 TIME_WAIT 억제 목적이 약하고, 데이터워치독+give-up 이 폭주를 막음)
+    if (m_relayEnabled) {
+        return RELAY_RECONNECT_MS;
+    }
+    // 직접 RTSP(원격): 최초 실패는 짧게 확인.
     if (!m_hasConnectedOnce) {
         return 1000;
     }
-    // 연결된 적 있는 채널: exponential backoff (5 → 10 → 20 → 40 → 60s)로 TIME_WAIT 폭증 억제.
+    // 연결된 적 있는 원격 채널: exponential backoff (5 → 10 → 20 → 40 → 60s)로 원격 부하/TIME_WAIT 억제.
     const int shift = qMin(m_reconnectCount, 5);
     const qint64 ms = static_cast<qint64>(RECONNECT_BASE_MS) << shift;
     return static_cast<int>(qMin<qint64>(ms, RECONNECT_MAX_INTERVAL_MS));
@@ -533,11 +648,12 @@ void VlcWidget::tryReconnect()
 {
     if (m_giveUp) { m_reconnectTimer->stop(); return; }
 
-    const int maxAttempts = m_hasConnectedOnce ? ESTABLISHED_MAX_RECONNECT : INITIAL_MAX_RECONNECT;
+    const int maxAttempts = maxReconnectAttempts();
     m_reconnectCount++;
 
     if (m_url.isEmpty() || m_reconnectCount > maxAttempts) {
         m_reconnectTimer->stop();
+        m_dataWatchdogTimer->stop();
         m_reconnecting = false;
         if (m_reconnectCount > maxAttempts) {
             // 자동 재연결 포기: 잔여 player 를 정리해 추가 연결/이벤트/TIME_WAIT 를 끊고,
@@ -601,6 +717,10 @@ void VlcWidget::stop()
     if (m_reconnectTimer) {
         m_reconnectTimer->stop();
     }
+    if (m_dataWatchdogTimer) {
+        m_dataWatchdogTimer->stop();
+    }
+    m_dataConfirmed = false;
     m_reconnecting = false;
 
     // 녹화 중이었다면 Remove 의미로 마무리 (녹화 player flush 만 비동기)
@@ -618,6 +738,7 @@ void VlcWidget::stop()
     m_nameLabel->hide();
     m_placeholder->show();
 
+    updateReconnectButton();   // m_url 비워졌으므로 버튼 숨김
     updateRecordUi();
 }
 
@@ -701,6 +822,13 @@ void VlcWidget::refreshStats(qint64 nowMs)
     }
 
     m_stats = s;
+
+    // 실제 영상 데이터 수신 확정: 디코딩/표시된 프레임이 생기면 "진짜 연결"로 확정한다.
+    // (Playing 이벤트만으론 MediaMTX 가짜 연결을 구분 못 함 → 여기서 데이터로 확정)
+    if (!m_dataConfirmed && s.valid && (s.displayed_pictures > 0 || s.decoded_video > 0)) {
+        confirmDataFlowing();
+    }
+
     maybeFlushForLatency(nowMs, s);
 }
 

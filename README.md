@@ -181,6 +181,7 @@ viewer/
 
 ## 운영 문서
 
+- [viewer 기능 정의](docs/viewer-feature-definition.md)
 - [VOXL2 RTSP 네트워크 접근 가이드](docs/voxl2-rtsp-network-access.md)
 - [VOXL2 Mini 기반 viewer 개선 계획](docs/voxl2-mini-viewer-improvement-plan.md)
 - [MediaMTX relay 전환 가이드](docs/mediamtx-relay-migration-guide.md)

@@ -272,6 +272,9 @@ QString MediaRelayManager::buildConfig(QString *signatureOut) const
     out << "pprof: false\n";
     out << "playback: false\n\n";
     out << "rtsp: true\n";
+    // 로컬 reader(VLC↔MediaMTX) 레그는 TCP 사용.
+    // (UDP 를 허용하면 libVLC 가 UDP 를 협상하지만 RTP 를 수신하지 못하는 문제가 있어 TCP 로 고정.
+    //  ffmpeg 는 UDP 수신 정상이나 libVLC 는 미수신 — VLC 한정 이슈. TCP 는 libVLC 가 정상 수신.)
     out << "rtspTransports: [tcp]\n";
     out << "rtspAddress: 127.0.0.1:8554\n";   // viewer 가 localhost 로만 접속 → 외부 노출/방화벽 팝업 차단
     out << "\n";

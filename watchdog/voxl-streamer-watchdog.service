@@ -1,0 +1,16 @@
+[Unit]
+Description=voxl-streamer keepalive + health watchdog
+After=voxl-streamer.service
+Wants=voxl-streamer.service
+StartLimitIntervalSec=60
+StartLimitBurst=20
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/voxl-streamer-watchdog
+Restart=always
+RestartSec=2
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
