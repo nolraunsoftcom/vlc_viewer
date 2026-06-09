@@ -152,7 +152,11 @@ libvlc_media_t *VlcWidget::openPlaybackMedia(const QString &url)
         libvlc_media_add_option(media, ":rtsp-tcp");
     }
     libvlc_media_add_option(media, ":network-caching=1000");  // 의견#5
-    libvlc_media_add_option(media, ":live-caching=1000");
+    libvlc_media_add_option(media, ":live-caching=1500");     // VLC 기본값(1500)에 맞춤 — 뭉개짐 완화
+    // 디코드 견고화 (지연 비용 0): HW 가속을 명시하고, 바쁠 때 프레임을 임의로 건너뛰지 않게 한다.
+    // plain VLC 는 깨끗한데 우리 앱만 뭉개지는 케이스 대응.
+    libvlc_media_add_option(media, ":avcodec-hw=any");
+    libvlc_media_add_option(media, ":avcodec-skip-frame=0");
     libvlc_media_add_option(media, ":no-audio");
     libvlc_media_add_option(media, ":audio-track=-1");
     return media;

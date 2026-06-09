@@ -97,7 +97,7 @@ int main(int argc, char *argv[])
     std::vector<const char *> vlcArgs = {
         "--reset-plugins-cache",
         "--network-caching=1000",   // 의견#5: 무선 깨짐 방지용 캐시 상향
-        "--live-caching=1000",
+        "--live-caching=1500",      // VLC 기본값(1500)에 맞춤 — live 버퍼 부족으로 인한 프레임 드롭/뭉개짐 완화
         "--drop-late-frames",       // 늦은 프레임은 버려 지연 누적 차단 (순정도 사용하는 레버)
         "--no-audio",               // 의견#4: 오디오 미사용
     };
