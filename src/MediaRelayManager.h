@@ -38,10 +38,19 @@ private:
     QProcess *m_process = nullptr;
     QVector<Channel> m_channels;
     QString m_lastConfigSignature;
+    bool m_intentionalStop = false;   // stopProcess() 로 의도적으로 끈 경우 = true (크래시 오탐 방지)
+
+    static const quint16 RTSP_PORT = 8554;   // rtspAddress :8554
+    static const quint16 API_PORT  = 9997;   // apiAddress 127.0.0.1:9997
 
     QString findExecutable() const;
     QString buildConfig(QString *signatureOut) const;
     bool writeConfig(const QString &config);
     bool startProcess();
     void stopProcess();
+
+    // robustness 헬퍼
+    bool isPortInUse(quint16 port) const;     // 127.0.0.1:<port> 점유 여부 탐지
+    void killStaleProcesses();                // 이전 실행에서 남은(고아) mediamtx 정리
+    bool waitForPortsFree(int timeoutMs);     // 포트가 비워질 때까지 대기
 };

@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "ChannelInfoDialog.h"
 #include "MediaRelayManager.h"
+#include "Version.h"
 #include "VlcWidget.h"
 #include "StatusBar.h"
 #include "Style.h"
@@ -243,7 +244,13 @@ MainWindow::MainWindow(libvlc_instance_t *vlcInstance, QWidget *parent)
     m_saveDebounceTimer->setInterval(150);
     connect(m_saveDebounceTimer, &QTimer::timeout, this, &MainWindow::saveChannels);
 
-    appendLog("System started", LogLevel::INFO);
+    appendLog(QStringLiteral("================================================"), LogLevel::INFO);
+    appendLog(QString("영상관리시스템 v%1").arg(QStringLiteral(APP_VERSION)), LogLevel::INFO);
+    appendLog(QString("libVLC %1 / Qt %2")
+                  .arg(QString::fromLatin1(libvlc_get_version()),
+                       QString::fromLatin1(qVersion())),
+              LogLevel::INFO);
+    appendLog(QStringLiteral("System started"), LogLevel::INFO);
     loadChannels();
     if (m_viewers.isEmpty()) {
         rebuildGrid();
