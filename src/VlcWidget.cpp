@@ -227,6 +227,7 @@ void VlcWidget::play(const QString &url, const QString &name)
     m_reconnecting = false;
     m_hasConnectedOnce = false;
     m_reconnectCount = 0;
+    m_giveUp = false;
 
     m_placeholder->hide();
     m_videoSurface->show();
@@ -396,6 +397,7 @@ void VlcWidget::onPlaying(const libvlc_event_t *, void *data)
         self->m_reconnecting = false;
         self->m_hasConnectedOnce = true;
         self->m_reconnectCount = 0;
+        self->m_giveUp = false;
         self->m_reconnectTimer->stop();
         self->setStatus(Status::Connected);
         self->m_placeholder->hide();
@@ -431,24 +433,20 @@ void VlcWidget::onEndReached(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
+        if (self->m_giveUp) return;   // 자동 재연결 포기 상태 → 재무장 금지 (TIME_WAIT 폭증 차단)
         const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
         if (self->m_recordingUsesPlaybackPlayer
             && (self->m_recState == RecState::Starting || self->m_recState == RecState::Active)) {
             self->stopRecordingInternal(RecStopReason::Disconnect);
         }
 
-        if (!self->m_reconnecting) {
-            self->m_reconnectCount = 0;
-        }
         self->m_reconnecting = true;
         self->setStatus(Status::Disconnected);
         self->showStatus("끊김");
         self->log(initialFailure
             ? QString("[%1] Initial connection ended; retrying").arg(self->m_name)
             : QString("[%1] Disconnected").arg(self->m_name), 2);
-        if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
-            self->m_reconnectTimer->start(initialFailure ? 1000 : 5000);
-        }
+        self->scheduleReconnect();
     }, Qt::QueuedConnection);
 }
 
@@ -456,15 +454,13 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
 {
     auto *self = static_cast<VlcWidget *>(data);
     QMetaObject::invokeMethod(self, [self]() {
+        if (self->m_giveUp) return;   // 자동 재연결 포기 상태 → 재무장 금지 (TIME_WAIT 폭증 차단)
         const bool initialFailure = !self->m_hasConnectedOnce && self->m_reconnectCount == 0;
         if (self->m_recordingUsesPlaybackPlayer
             && (self->m_recState == RecState::Starting || self->m_recState == RecState::Active)) {
             self->stopRecordingInternal(RecStopReason::Disconnect);
         }
 
-        if (!self->m_reconnecting) {
-            self->m_reconnectCount = 0;
-        }
         self->m_reconnecting = true;
         self->setStatus(Status::Disconnected);
         self->showStatus("연결 오류");
@@ -472,9 +468,7 @@ void VlcWidget::onError(const libvlc_event_t *, void *data)
             ? QString("[%1] Initial connection failed; retrying").arg(self->m_name)
             : QString("[%1] Connection Error").arg(self->m_name),
             initialFailure ? 2 : 3);
-        if (self->m_autoReconnect && !self->m_reconnectTimer->isActive()) {
-            self->m_reconnectTimer->start(initialFailure ? 1000 : 5000);
-        }
+        self->scheduleReconnect();
     }, Qt::QueuedConnection);
 }
 
@@ -516,17 +510,45 @@ void VlcWidget::onRecordError(const libvlc_event_t *event, void *data)
     }, Qt::QueuedConnection);
 }
 
+int VlcWidget::reconnectIntervalMs() const
+{
+    // 한 번도 연결 안 된 채널(카메라 OFF 등)은 짧게 시도 후 빠르게 포기.
+    if (!m_hasConnectedOnce) {
+        return 1000;
+    }
+    // 연결된 적 있는 채널: exponential backoff (5 → 10 → 20 → 40 → 60s)로 TIME_WAIT 폭증 억제.
+    const int shift = qMin(m_reconnectCount, 5);
+    const qint64 ms = static_cast<qint64>(RECONNECT_BASE_MS) << shift;
+    return static_cast<int>(qMin<qint64>(ms, RECONNECT_MAX_INTERVAL_MS));
+}
+
+void VlcWidget::scheduleReconnect()
+{
+    if (m_giveUp || !m_autoReconnect || m_url.isEmpty()) return;
+    if (m_reconnectTimer->isActive()) return;
+    m_reconnectTimer->start(reconnectIntervalMs());
+}
+
 void VlcWidget::tryReconnect()
 {
+    if (m_giveUp) { m_reconnectTimer->stop(); return; }
+
+    const int maxAttempts = m_hasConnectedOnce ? ESTABLISHED_MAX_RECONNECT : INITIAL_MAX_RECONNECT;
     m_reconnectCount++;
 
-    if (m_url.isEmpty() || m_reconnectCount > MAX_RECONNECT) {
+    if (m_url.isEmpty() || m_reconnectCount > maxAttempts) {
         m_reconnectTimer->stop();
         m_reconnecting = false;
-        if (m_reconnectCount > MAX_RECONNECT) {
+        if (m_reconnectCount > maxAttempts) {
+            // 자동 재연결 포기: 잔여 player 를 정리해 추가 연결/이벤트/TIME_WAIT 를 끊고,
+            // m_giveUp 으로 이후 error/endReached 의 재무장을 차단한다. 수동 reconnect 로만 재개.
+            m_giveUp = true;
+            cleanupPlayer();
+            resetStatsCache();
             setStatus(Status::Failed);
-            showStatus("Connection Failed");
-            log(QString("[%1] Max reconnect attempts reached").arg(m_name), 3);
+            showStatus("오프라인 - 수동 재연결 필요");
+            log(QString("[%1] 자동 재연결 중단(%2회 실패). 우클릭 '재연결' 또는 채널 수정으로 재시작.")
+                    .arg(m_name).arg(maxAttempts), 3);
         }
         return;
     }
@@ -536,11 +558,11 @@ void VlcWidget::tryReconnect()
     resetStatsCache();
 
     setStatus(Status::Reconnecting);
-    showStatus(QString("재연결중... (%1/%2)").arg(m_reconnectCount).arg(MAX_RECONNECT));
-    log(QString("[%1] Reconnecting... attempt %2").arg(m_name).arg(m_reconnectCount), 2);
+    showStatus(QString("재연결중... (%1/%2)").arg(m_reconnectCount).arg(maxAttempts));
+    log(QString("[%1] Reconnecting... attempt %2/%3").arg(m_name).arg(m_reconnectCount).arg(maxAttempts), 2);
 
     if (!startPlaybackPlayer(Status::Reconnecting)) {
-        m_reconnectTimer->start();
+        scheduleReconnect();
     }
 }
 
@@ -555,6 +577,7 @@ void VlcWidget::reconnect()
     m_reconnectTimer->stop();
     m_reconnecting = false;
     m_reconnectCount = 0;
+    m_giveUp = false;   // 수동 재연결: 포기 상태 해제 + 카운터 초기화
 
     m_url = url;
     m_name = name;
@@ -898,9 +921,7 @@ void VlcWidget::fallbackToReconnect()
     log(QString("[%1] Playback recovery failed; falling back to reconnect").arg(m_name), 3);
     setStatus(Status::Disconnected);
     showStatus("재연결 대기");
-    if (m_autoReconnect && !m_reconnectTimer->isActive()) {
-        m_reconnectTimer->start();
-    }
+    scheduleReconnect();
 }
 
 // ============================================================
