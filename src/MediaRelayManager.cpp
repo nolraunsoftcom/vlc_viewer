@@ -254,7 +254,7 @@ QString MediaRelayManager::buildConfig(QString *signatureOut) const
     out << "playback: false\n\n";
     out << "rtsp: true\n";
     out << "rtspTransports: [tcp]\n";
-    out << "rtspAddress: :8554\n";
+    out << "rtspAddress: 127.0.0.1:8554\n";   // viewer 가 localhost 로만 접속 → 외부 노출/방화벽 팝업 차단
     out << "\n";
     out << "rtmp: false\n";
     out << "hls: false\n";
@@ -345,10 +345,41 @@ bool MediaRelayManager::startProcess()
         return false;
     }
 
+    // 기동 헬스 체크: waitForStarted() 는 프로세스 '생성'만 확인한다.
+    // config/bind 오류로 즉시 죽는 경우를 잡기 위해, 프로세스가 살아있고
+    // API 포트가 실제로 열릴 때까지(최대 4초) 확인한 뒤 성공으로 본다.
+    QElapsedTimer health;
+    health.start();
+    bool healthy = false;
+    while (health.elapsed() < 4000) {
+        if (m_process->state() != QProcess::Running) {
+            break;   // 즉시 종료 = 기동 실패
+        }
+        if (isPortInUse(API_PORT)) {
+            healthy = true;   // API 리스너 open = 정상 기동 확인
+            break;
+        }
+        QThread::msleep(150);
+    }
+
+    if (!healthy) {
+        emit logMessage(
+            QStringLiteral("MediaMTX 기동 확인 실패(즉시 종료 또는 API 포트 미개방). "
+                           "config/포트 충돌 가능성 — 위 MediaMTX 로그를 확인하세요."),
+            3);
+        if (m_process->state() != QProcess::NotRunning) {
+            stopProcess();    // 떠 있으나 비정상이면 정리
+        } else {
+            removePidFile();  // 이미 죽었으면 잔여 PID 기록 정리
+        }
+        return false;
+    }
+
     const qint64 pid = m_process->processId();
-    writePidFile(pid);   // 다음 실행에서 고아 회수에 사용
+    writePidFile(pid);   // 건강 확인 후에만 기록 → 다음 실행의 고아 회수에 사용
     emit logMessage(
-        QStringLiteral("MediaMTX 시작됨 (pid=%1, config=%2).").arg(pid).arg(configPath()),
+        QStringLiteral("MediaMTX 시작·확인됨 (pid=%1, API/RTSP open, config=%2).")
+            .arg(pid).arg(configPath()),
         1);
     return true;
 }
